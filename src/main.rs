@@ -43,8 +43,8 @@ impl Timer for RemoteTimer {
 
     fn set_game_time(&mut self, time: time::Duration) {
         // send message here
-        self.socket.write(format!("setgametime {}:{}:{}.{}\r\n", time.whole_hours(), time.whole_minutes(), time.whole_seconds(), time.whole_milliseconds()).as_bytes()).unwrap();
-        println!("setting game time!");
+        self.socket.write(format!("setgametime {}:{}:{}.{}\r\n", time.whole_hours(), time.whole_minutes() % 60, time.whole_seconds() % 60, time.whole_milliseconds() % 1000).as_bytes()).unwrap();
+        //println!("setting game time!");
     }
 
     fn pause_game_time(&mut self) {
