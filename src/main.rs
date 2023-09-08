@@ -1,6 +1,6 @@
-use std::{fmt, thread, env, fs, io::{Read, Write}, net};
+use std::{fmt, thread, env, fs, io::{Read, Write}, net, time::Instant};
 
-use livesplit_auto_splitting::{Runtime, Timer, SettingsStore, TimerState, time};
+use livesplit_auto_splitting::{Runtime, Timer, SettingsStore, TimerState, time, Config};
 
 pub struct RemoteTimer {
     state: TimerState,
@@ -39,6 +39,16 @@ impl Timer for RemoteTimer {
         self.socket.write("reset\r\n".as_bytes()).unwrap();
         println!("resetting timer!");
         self.state = TimerState::NotRunning;
+    }
+
+    fn skip_split(&mut self) {
+        // no message for this, skip it
+        println!("cannot skip!");
+    }
+
+    fn undo_split(&mut self) {
+        // no message for this, skip it
+        println!("cannot undo!");
     }
 
     fn set_game_time(&mut self, time: time::Duration) {
@@ -97,13 +107,17 @@ fn main() {
             }
 
             let timer = RemoteTimer::new(socket);
-            let settings = SettingsStore::new();
+            let config = Config::default();
+            let mut next_step = Instant::now();
 
-            match Runtime::new(&filebuf, timer, settings) {
+            match Runtime::new(&filebuf, timer, config) {
                 Ok(mut runtime) => {
                     loop {
-                        let time_to_wait = runtime.update().unwrap();
-                        thread::sleep(time_to_wait);
+                        runtime.update().unwrap();
+
+                        next_step = next_step.checked_add(runtime.tick_rate()).unwrap();
+
+                        thread::sleep(next_step - Instant::now());
                     }
                 },
                 Err(err) => {

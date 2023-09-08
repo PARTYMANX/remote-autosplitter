@@ -6,4 +6,4 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-livesplit-auto-splitting = "0.1.0"
+livesplit-auto-splitting = { path = "../livesplit-core/crates/livesplit-auto-splitting" }
