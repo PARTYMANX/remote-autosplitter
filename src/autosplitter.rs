@@ -1,6 +1,6 @@
-use std::{fmt, fs, io::Read, sync::mpsc, thread};
+use std::{fmt, fs, io::Read, sync::{Arc, Mutex, mpsc}, thread, time::Instant};
 
-use livesplit_auto_splitting::{Runtime, Timer, SettingsStore, TimerState, time};
+use livesplit_auto_splitting::{Runtime, Timer, TimerState};
 
 use crate::message::{AutosplitterMessage, LiveSplitServerMessage, RoutedMessage};
 
@@ -35,16 +35,55 @@ impl Autosplitter {
 
         println!("Read {} bytes", filebuf.len());
 
-        let timer = RemoteTimer::new(&self.reciever, &self.sender);
-        let settings = SettingsStore::new();
+        let timer_state = Arc::new(Mutex::new((TimerState::NotRunning, 0)));
+        let timer = RemoteTimer::new(self.sender.clone(), timer_state.clone());
+        let settings_map = livesplit_auto_splitting::settings::Map::new();
 
-        match Runtime::new(&filebuf, timer, settings) {
-            Ok(mut runtime) => {
+        let config = livesplit_auto_splitting::Config::default();
+
+        let runtime = match Runtime::new(config) {
+            Ok(v) => v,
+            Err(err) => {
+                println!("Failed to start autosplitter runtime: {}", err);
+                return;
+            }
+        };
+
+        let compiled_splitter = match runtime.compile(&filebuf) {
+            Ok(v) => v,
+            Err(err) => {
+                println!("Failed to compile autosplitter: {}", err);
+                return;
+            }
+        };
+
+        let mut next_run_time = Instant::now();
+        match compiled_splitter.instantiate(timer, Some(settings_map), None) {
+            Ok(splitter) => {
                 loop {
-                    let time_to_wait = runtime.update().unwrap();
+                    safe_wait(next_run_time);
+                    match splitter.lock().update() {
+                        Ok(()) => {}
+                        Err(e) => {
+                            println!("Failed to run autosplitter: {}", e);
+                            break;
+                        }
+                    };
+                    next_run_time += splitter.tick_rate();
+
+                    self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState)).unwrap();
+
+                    let (state, split_index) = match self.reciever.recv().unwrap() {
+                        AutosplitterMessage::TimerGetStateResponse(state, split_index) => (state, split_index),
+                        AutosplitterMessage::Stop => todo!(),
+                    };
+
+                    let mut lock = timer_state.lock().unwrap();
+                    lock.0 = state;
+                    lock.1 = split_index;
+
                     // would probably be a good idea to update state here
-                    // also change wait behavior to wait for time of last run + time_to_wait
-                    thread::sleep(time_to_wait);
+                    //self.sender.send(RoutedMessage::Client(Li))
                 }
             },
             Err(err) => {
@@ -55,31 +94,35 @@ impl Autosplitter {
     }
 }
 
-struct RemoteTimer<'a> {
-    state: TimerState,
-    reciever: &'a mpsc::Receiver<AutosplitterMessage>,
-    sender: &'a mpsc::Sender<RoutedMessage>,
+struct RemoteTimer {
+    sender: mpsc::Sender<RoutedMessage>,
+    timer_state: Arc<Mutex<(TimerState, u32)>>,
 }
 
-impl<'a> RemoteTimer<'a> {
-    fn new(reciever: &'a mpsc::Receiver<AutosplitterMessage>, sender: &'a mpsc::Sender<RoutedMessage>) -> Self {
+impl RemoteTimer {
+    fn new(sender: mpsc::Sender<RoutedMessage>, timer_state: Arc<Mutex<(TimerState, u32)>>) -> Self {
         Self {
-            state: TimerState::NotRunning,
-            reciever,
             sender,
+            timer_state,
         }
+    }
+
+    fn set_state(&self, state: TimerState) {
+        let mut lock = self.timer_state.lock().unwrap();
+        lock.0 = state;
     }
 }
 
-impl Timer for RemoteTimer<'_> {
+impl Timer for RemoteTimer {
     fn state(&self) -> TimerState {
-        self.state
+        let state = self.timer_state.lock().unwrap();
+        state.0
     }
 
     fn start(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerStart)).unwrap();
         println!("starting timer!");
-        self.state = TimerState::Running;
+        self.set_state(TimerState::Running);
     }
 
     fn split(&mut self) {
@@ -90,11 +133,11 @@ impl Timer for RemoteTimer<'_> {
     fn reset(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerReset)).unwrap();
         println!("resetting timer!");
-        self.state = TimerState::NotRunning;
+        self.set_state(TimerState::NotRunning);
         
     }
 
-    fn set_game_time(&mut self, time: time::Duration) {
+    fn set_game_time(&mut self, time: livesplit_auto_splitting::time::Duration) {
         // send message here
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerSetGameTime(time))).unwrap();
         //println!("setting game time!");
@@ -113,8 +156,47 @@ impl Timer for RemoteTimer<'_> {
     fn set_variable(&mut self, _key: &str, _value: &str) {
 
     }
-
-    fn log(&mut self, message: fmt::Arguments<'_>) {
+    
+    fn current_split_index(&self) -> Option<usize> {
+        let state = self.timer_state.lock().unwrap();
+        match state.0 {
+            TimerState::NotRunning => None,
+            TimerState::Running |
+            TimerState::Paused |
+            TimerState::Ended => Some(state.1 as usize)
+        }
+    }
+    
+    fn segment_splitted(&self, idx: usize) -> Option<bool> {
+        todo!()
+    }
+    
+    fn skip_split(&mut self) {
+        self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerSkipSplit)).unwrap();
+        println!("skipping split!");
+    }
+    
+    fn undo_split(&mut self) {
+        self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerUndoSplit)).unwrap();
+        println!("undoing split!");
+    }
+    
+    fn log_auto_splitter(&mut self, message: fmt::Arguments) {
         println!("autosplitter log: {}", message);
+    }
+    
+    fn log_runtime(&mut self, message: fmt::Arguments, _log_level: livesplit_auto_splitting::LogLevel) {
+        println!("runtime log: {}", message);
+    }
+}
+
+fn safe_wait(target: std::time::Instant) {
+    let mut cur_time = std::time::Instant::now();
+    while cur_time < target {
+        cur_time = std::time::Instant::now();
+
+        if target - cur_time > std::time::Duration::from_millis(3) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 }

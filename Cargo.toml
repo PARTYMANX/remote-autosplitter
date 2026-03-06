@@ -1,9 +1,9 @@
 [package]
 name = "remote-autosplitter"
-version = "0.1.1"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-livesplit-auto-splitting = "0.1.0"
+livesplit-auto-splitting = { git = "https://github.com/LiveSplit/livesplit-core", rev = "c4a2068b71586d92d3864de00249226c88edf774" }
