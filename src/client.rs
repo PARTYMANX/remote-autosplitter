@@ -2,7 +2,7 @@ use std::{io::{Read, Write}, net, sync::mpsc};
 
 use livesplit_auto_splitting::TimerState;
 
-use crate::message::{AutosplitterMessage, LiveSplitServerMessage, RoutedMessage};
+use crate::message::{AutosplitterMessage, ConnectionStatus, LiveSplitServerMessage, RoutedMessage, UIMessage};
 
 #[derive(Debug)]
 enum ClientError {
@@ -11,77 +11,80 @@ enum ClientError {
 
 pub struct LiveSplitClient {
     address: String,
-    reciever: mpsc::Receiver<LiveSplitServerMessage>,
+    receiver: mpsc::Receiver<LiveSplitServerMessage>,
     sender: mpsc::Sender<RoutedMessage>,
 }
 
 impl LiveSplitClient {
-    pub fn new(address: String, reciever: mpsc::Receiver<LiveSplitServerMessage>, sender: mpsc::Sender<RoutedMessage>) -> Self {
+    pub fn new(address: String, receiver: mpsc::Receiver<LiveSplitServerMessage>, sender: mpsc::Sender<RoutedMessage>) -> Self {
         Self {
             address,
-            reciever,
+            receiver,
             sender,
         }
     }
 
     pub fn run(&self) {
         loop {
-            println!("Connecting to {}...", self.address);
+            self.sender.send(RoutedMessage::UI(UIMessage::ConnectionStatus(ConnectionStatus::Connecting))).unwrap();
+            self.log(format!("Connecting to {}...", self.address));
 
             match net::TcpStream::connect(&self.address) {
                 Ok(mut socket) => {
-                    println!("Connected to server!");
+                    self.log(format!("Connected to server!"));
+                    self.sender.send(RoutedMessage::UI(UIMessage::ConnectionStatus(ConnectionStatus::Connected))).unwrap();
                     let result = self.handle_messages(&mut socket);
 
                     match result {
                         Ok(()) => break,
                         Err(e) => {
-                            println!("Client error: {:?}", e);
+                            self.log(format!("Client error: {:?}", e));
                         }
                     }
                 },
                 Err(e) => {
-                    println!("Failed to connect to {}: {}", self.address, e);
+                    self.log(format!("Failed to connect to {}: {}", self.address, e));
                 }
             }
+            self.sender.send(RoutedMessage::UI(UIMessage::ConnectionStatus(ConnectionStatus::Disconnected))).unwrap();
         }
     }
 
     fn handle_messages(&self, socket: &mut net::TcpStream) -> Result<(), ClientError> {
         loop {
-            match self.reciever.recv().unwrap() {
+            match self.receiver.recv().unwrap() {
                 LiveSplitServerMessage::TimerStart => match socket.write("starttimer\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
                 LiveSplitServerMessage::TimerSplit => match socket.write("split\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
                 LiveSplitServerMessage::TimerReset => match socket.write("reset\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
                 LiveSplitServerMessage::TimerUndoSplit => match socket.write("unsplit\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
                 LiveSplitServerMessage::TimerSkipSplit => match socket.write("skipsplit\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
@@ -91,7 +94,7 @@ impl LiveSplitClient {
                     match result {
                         Ok(_) => {},
                         Err(e) => {
-                            println!("Socket error: {}", e);
+                            self.log(format!("Socket error: {}", e));
                             return Err(ClientError::LostConnection)
                         }
                     }
@@ -99,14 +102,14 @@ impl LiveSplitClient {
                 LiveSplitServerMessage::TimerPauseGameTime => match socket.write("pausegametime\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
                 LiveSplitServerMessage::TimerResumeGameTime => match socket.write("unpausegametime\r\n".as_bytes()) {
                     Ok(_) => {},
                     Err(e) => {
-                        println!("Socket error: {}", e);
+                        self.log(format!("Socket error: {}", e));
                         return Err(ClientError::LostConnection)
                     }
                 },
@@ -116,7 +119,7 @@ impl LiveSplitClient {
                     match socket.write("getcurrenttimerphase\r\n".as_bytes()) {
                         Ok(_) => {},
                         Err(e) => {
-                            println!("Socket error: {}", e);
+                            self.log(format!("Socket error: {}", e));
                             return Err(ClientError::LostConnection)
                         }
                     };
@@ -132,13 +135,13 @@ impl LiveSplitClient {
                                     _ => TimerState::NotRunning,
                                 },
                                 Err(e) => {
-                                    println!("Failed to parse timer state response: {}", e);
+                                    self.log(format!("Failed to parse timer state response: {}", e));
                                     TimerState::NotRunning
                                 },
                             }
                         },
                         Err(e) => {
-                            println!("Socket error: {}", e);
+                            self.log(format!("Socket error: {}", e));
                             return Err(ClientError::LostConnection)
                         },
                     };
@@ -146,7 +149,7 @@ impl LiveSplitClient {
                     match socket.write("getsplitindex\r\n".as_bytes()) {
                         Ok(_) => {},
                         Err(e) => {
-                            println!("Socket error: {}", e);
+                            self.log(format!("Socket error: {}", e));
                             return Err(ClientError::LostConnection)
                         }
                     };
@@ -161,18 +164,18 @@ impl LiveSplitClient {
                                         v as u32
                                     },
                                     Err(e) => {
-                                        println!("Failed to parse timer split index response: {}", e);
+                                        self.log(format!("Failed to parse timer split index response: {}", e));
                                         0
                                     },
                                 },
                                 Err(e) => {
-                                    println!("Failed to parse timer split index response: {}", e);
+                                    self.log(format!("Failed to parse timer split index response: {}", e));
                                     0
                                 },
                             }
                         },
                         Err(e) => {
-                            println!("Socket error: {}", e);
+                            self.log(format!("Socket error: {}", e));
                             return Err(ClientError::LostConnection)
                         },
                     };
@@ -184,5 +187,9 @@ impl LiveSplitClient {
         }
 
         Ok(())
+    }
+
+    fn log(&self, msg: String) {
+        self.sender.send(RoutedMessage::UI(UIMessage::Log(msg))).unwrap();
     }
 }

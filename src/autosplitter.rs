@@ -1,26 +1,26 @@
-use std::{fmt, fs, io::Read, sync::{Arc, Mutex, mpsc}, thread, time::Instant};
+use std::{fmt, fs, io::Read, sync::{Arc, Mutex, mpsc}, time::Instant};
 
 use livesplit_auto_splitting::{Runtime, Timer, TimerState};
 
-use crate::message::{AutosplitterMessage, LiveSplitServerMessage, RoutedMessage};
+use crate::message::{AutosplitterMessage, AutosplitterStatus, LiveSplitServerMessage, RoutedMessage, UIMessage};
 
 pub struct Autosplitter {
     filepath: String,
-    reciever: mpsc::Receiver<AutosplitterMessage>,
+    receiver: mpsc::Receiver<AutosplitterMessage>,
     sender: mpsc::Sender<RoutedMessage>,
 }
 
 impl Autosplitter {
-    pub fn new(filepath: String, reciever: mpsc::Receiver<AutosplitterMessage>, sender: mpsc::Sender<RoutedMessage>) -> Self {
+    pub fn new(filepath: String, receiver: mpsc::Receiver<AutosplitterMessage>, sender: mpsc::Sender<RoutedMessage>) -> Self {
         Self { 
             filepath, 
-            reciever,
+            receiver,
             sender,
         }
     }
 
     pub fn run(&self) {
-        println!("Opening autosplitter {}...", self.filepath);
+        self.log(format!("Opening autosplitter {}...", self.filepath));
 
         let mut filebuf = vec!();
         match fs::File::open(&self.filepath) {
@@ -33,7 +33,7 @@ impl Autosplitter {
             }
         }
 
-        println!("Read {} bytes", filebuf.len());
+        self.log(format!("Read {} bytes", filebuf.len()));
 
         let timer_state = Arc::new(Mutex::new((TimerState::NotRunning, 0)));
         let timer = RemoteTimer::new(self.sender.clone(), timer_state.clone());
@@ -44,7 +44,7 @@ impl Autosplitter {
         let runtime = match Runtime::new(config) {
             Ok(v) => v,
             Err(err) => {
-                println!("Failed to start autosplitter runtime: {}", err);
+                self.log(format!("Failed to start autosplitter runtime: {}", err));
                 return;
             }
         };
@@ -52,7 +52,7 @@ impl Autosplitter {
         let compiled_splitter = match runtime.compile(&filebuf) {
             Ok(v) => v,
             Err(err) => {
-                println!("Failed to compile autosplitter: {}", err);
+                self.log(format!("Failed to compile autosplitter: {}", err));
                 return;
             }
         };
@@ -61,36 +61,86 @@ impl Autosplitter {
         match compiled_splitter.instantiate(timer, Some(settings_map), None) {
             Ok(splitter) => {
                 loop {
-                    safe_wait(next_run_time);
-                    match splitter.lock().update() {
-                        Ok(()) => {}
-                        Err(e) => {
-                            println!("Failed to run autosplitter: {}", e);
+                    let mut status = AutosplitterStatus::Running;
+
+                    {
+                        let mut splitter_lock = splitter.lock();
+                        match splitter_lock.update() {
+                            Ok(()) => {}
+                            Err(e) => {
+                                self.log(format!("Failed to run autosplitter: {}", e));
+                                break;
+                            }
+                        };
+
+                        for _ in splitter_lock.attached_processes() {
+                            status = AutosplitterStatus::Attached;
                             break;
                         }
-                    };
+                    }
+                    
                     next_run_time += splitter.tick_rate();
 
+                    // request a state update from the client
+                    // we'll get the response when polling the receiver
                     self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState)).unwrap();
+                    self.sender.send(RoutedMessage::UI(UIMessage::AutosplitterStatus(status))).unwrap();
 
-                    let (state, split_index) = match self.reciever.recv().unwrap() {
-                        AutosplitterMessage::TimerGetStateResponse(state, split_index) => (state, split_index),
-                        AutosplitterMessage::Stop => todo!(),
-                    };
+                    let should_quit = self.wait_poll_messages(next_run_time, &timer_state);
 
-                    let mut lock = timer_state.lock().unwrap();
-                    lock.0 = state;
-                    lock.1 = split_index;
-
-                    // would probably be a good idea to update state here
-                    //self.sender.send(RoutedMessage::Client(Li))
+                    if should_quit {
+                        break;
+                    }
                 }
+                self.sender.send(RoutedMessage::UI(UIMessage::AutosplitterStatus(AutosplitterStatus::NotRunning))).unwrap();
             },
             Err(err) => {
-                println!("Failed to start autosplitter runtime: {}", err);
+                self.log(format!("Failed to start autosplitter runtime: {}", err));
                 return;
             }
         }
+    }
+
+    /// Performs a safe sleep but with `recv_timeout`, so we can read messages while
+    /// waiting on the next tick.
+    /// Returns a bool that is true if the Autosplitter should terminate.
+    fn wait_poll_messages(&self, target: std::time::Instant, timer_state: &Arc<Mutex<(TimerState, u32)>>) -> bool {
+        let mut cur_time = std::time::Instant::now();
+        while cur_time < target {
+            cur_time = std::time::Instant::now();
+
+            if target - cur_time > std::time::Duration::from_millis(3) {
+                match self.receiver.recv_timeout(std::time::Duration::from_millis(1)) {
+                    Ok(message) => if self.service_message(message, timer_state) {
+                        return true;
+                    },
+                    Err(e) => match e {
+                        mpsc::RecvTimeoutError::Timeout => {},
+                        mpsc::RecvTimeoutError::Disconnected => panic!("Receiver disconnected! Error: {}", e),
+                    },
+                }
+            }
+        }
+
+        false
+    }
+
+    fn service_message(&self, message: AutosplitterMessage, timer_state: &Arc<Mutex<(TimerState, u32)>>) -> bool {
+        match message {
+            AutosplitterMessage::TimerGetStateResponse(state, split_index) => {
+                let mut lock = timer_state.lock().unwrap();
+
+                lock.0 = state;
+                lock.1 = split_index;
+
+                false
+            },
+            AutosplitterMessage::Stop => true,
+        }
+    }
+
+    fn log(&self, msg: String) {
+        self.sender.send(RoutedMessage::UI(UIMessage::Log(msg))).unwrap();
     }
 }
 
@@ -111,6 +161,10 @@ impl RemoteTimer {
         let mut lock = self.timer_state.lock().unwrap();
         lock.0 = state;
     }
+
+    fn log_action(&self, msg: String) {
+        self.sender.send(RoutedMessage::UI(UIMessage::Log(msg))).unwrap();
+    }
 }
 
 impl Timer for RemoteTimer {
@@ -121,36 +175,34 @@ impl Timer for RemoteTimer {
 
     fn start(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerStart)).unwrap();
-        println!("starting timer!");
+        self.log_action(format!("starting timer!"));
         self.set_state(TimerState::Running);
     }
 
     fn split(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerSplit)).unwrap();
-        println!("splitting timer!");
+        self.log_action(format!("splitting timer!"));
     }
 
     fn reset(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerReset)).unwrap();
-        println!("resetting timer!");
+        self.log_action(format!("resetting timer!"));
         self.set_state(TimerState::NotRunning);
         
     }
 
     fn set_game_time(&mut self, time: livesplit_auto_splitting::time::Duration) {
-        // send message here
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerSetGameTime(time))).unwrap();
-        //println!("setting game time!");
     }
 
     fn pause_game_time(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerPauseGameTime)).unwrap();
-        println!("pausing game time!");
+        self.log_action(format!("pausing game time!"));
     }
 
     fn resume_game_time(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerResumeGameTime)).unwrap();
-        println!("resuming game time!");
+        self.log_action(format!("resuming game time!"));
     }
 
     fn set_variable(&mut self, _key: &str, _value: &str) {
@@ -167,36 +219,25 @@ impl Timer for RemoteTimer {
         }
     }
     
-    fn segment_splitted(&self, idx: usize) -> Option<bool> {
+    fn segment_splitted(&self, _idx: usize) -> Option<bool> {
         todo!()
     }
     
     fn skip_split(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerSkipSplit)).unwrap();
-        println!("skipping split!");
+        self.log_action(format!("skipping split!"));
     }
     
     fn undo_split(&mut self) {
         self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::TimerUndoSplit)).unwrap();
-        println!("undoing split!");
+        self.log_action(format!("undoing split!"));
     }
     
     fn log_auto_splitter(&mut self, message: fmt::Arguments) {
-        println!("autosplitter log: {}", message);
+        self.sender.send(RoutedMessage::UI(UIMessage::Log(format!("autosplitter: {}", message)))).unwrap();
     }
     
     fn log_runtime(&mut self, message: fmt::Arguments, _log_level: livesplit_auto_splitting::LogLevel) {
-        println!("runtime log: {}", message);
-    }
-}
-
-fn safe_wait(target: std::time::Instant) {
-    let mut cur_time = std::time::Instant::now();
-    while cur_time < target {
-        cur_time = std::time::Instant::now();
-
-        if target - cur_time > std::time::Duration::from_millis(3) {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        self.sender.send(RoutedMessage::UI(UIMessage::Log(format!("runtime: {}", message)))).unwrap();
     }
 }
