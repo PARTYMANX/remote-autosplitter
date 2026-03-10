@@ -1,6 +1,11 @@
 use std::{sync::mpsc, time};
 
-use ratatui::{layout::Rect, style::{Color, Modifier, Style, Stylize}, text::{Line, Span}, widgets::{Block, List, ListDirection, Paragraph}};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier, Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, List, ListDirection, Paragraph},
+};
 
 use crate::message::{AutosplitterStatus, ConnectionStatus, RoutedMessage, UIMessage};
 
@@ -16,9 +21,9 @@ pub struct UI {
 
 impl UI {
     pub fn new(receiver: mpsc::Receiver<UIMessage>, sender: mpsc::Sender<RoutedMessage>) -> Self {
-        Self { 
+        Self {
             tick_duration: time::Duration::from_secs_f64(1.0 / 60.0),
-            receiver, 
+            receiver,
             sender,
             splitter_status: AutosplitterStatus::NotRunning,
             connection_status: ConnectionStatus::Disconnected,
@@ -28,9 +33,7 @@ impl UI {
     }
 
     pub fn run(&mut self) {
-        let light_red = Style::new()
-            .fg(Color::Red)
-            .add_modifier(Modifier::BOLD);
+        let light_red = Style::new().fg(Color::Red).add_modifier(Modifier::BOLD);
         let light_red_blink = Style::new()
             .fg(Color::Red)
             .add_modifier(Modifier::BOLD)
@@ -38,9 +41,7 @@ impl UI {
         let light_green = Style::new()
             .fg(Color::LightGreen)
             .add_modifier(Modifier::BOLD);
-        let light_blue = Style::new()
-            .fg(Color::Blue)
-            .add_modifier(Modifier::BOLD);
+        let light_blue = Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD);
 
         ratatui::run(|terminal| {
             let mut next_tick = time::Instant::now();
@@ -70,18 +71,24 @@ impl UI {
                     let list = List::new(log_lines)
                         .block(block)
                         .direction(ListDirection::TopToBottom);
-                    frame.render_widget(list, Rect::new(frame.area().x, frame.area().y, frame.area().width, frame.area().height - 1) );
+                    frame.render_widget(
+                        list,
+                        Rect::new(
+                            frame.area().x,
+                            frame.area().y,
+                            frame.area().width,
+                            frame.area().height - 1,
+                        ),
+                    );
 
                     /*if self.log_lines.len() > 0 {
                         let text = Paragraph::new(self.log_lines[self.log_front as usize].clone())
                             .block(block);
                         frame.render_widget(text, Rect::new(frame.area().x, frame.area().y, frame.area().width, frame.area().height - 1) );
                     }*/
-                    
+
                     let status = Line::from(vec![
-                        Span::raw(
-                            "Connection ",
-                        ),
+                        Span::raw("Connection "),
                         Span::styled(
                             "● ",
                             match self.connection_status {
@@ -90,9 +97,7 @@ impl UI {
                                 ConnectionStatus::Connected => light_green,
                             },
                         ),
-                        Span::raw(
-                            "Autosplitter ",
-                        ),
+                        Span::raw("Autosplitter "),
                         Span::styled(
                             "● ",
                             match self.splitter_status {
@@ -101,14 +106,20 @@ impl UI {
                                 AutosplitterStatus::Attached => light_blue,
                             },
                         ),
-                    ]).style(
-                        Style::new()
-                        .fg(Color::Black)
-                        .bg(Color::DarkGray)
-                        //.add_modifier(Modifier::BOLD)
+                    ])
+                    .style(
+                        Style::new().fg(Color::Black).bg(Color::DarkGray), //.add_modifier(Modifier::BOLD)
                     )
                     .right_aligned();
-                    frame.render_widget(status, Rect::new(frame.area().x, frame.area().height - 1, frame.area().width, 1) );
+                    frame.render_widget(
+                        status,
+                        Rect::new(
+                            frame.area().x,
+                            frame.area().height - 1,
+                            frame.area().width,
+                            1,
+                        ),
+                    );
                 })?;
 
                 //let current_time = time::Instant::now();
@@ -122,7 +133,8 @@ impl UI {
                 }
             }
             Ok::<(), Box<dyn std::error::Error>>(())
-        }).unwrap()
+        })
+        .unwrap()
     }
 
     /// Performs a safe sleep but with `recv_timeout`, so we can read messages while
@@ -134,13 +146,20 @@ impl UI {
             cur_time = std::time::Instant::now();
 
             if target - cur_time > std::time::Duration::from_millis(3) {
-                match self.receiver.recv_timeout(std::time::Duration::from_millis(1)) {
-                    Ok(message) => if self.service_message(message) {
-                        return true;
-                    },
+                match self
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_millis(1))
+                {
+                    Ok(message) => {
+                        if self.service_message(message) {
+                            return true;
+                        }
+                    }
                     Err(e) => match e {
-                        mpsc::RecvTimeoutError::Timeout => {},
-                        mpsc::RecvTimeoutError::Disconnected => panic!("Receiver disconnected! Error: {}", e),
+                        mpsc::RecvTimeoutError::Timeout => {}
+                        mpsc::RecvTimeoutError::Disconnected => {
+                            panic!("Receiver disconnected! Error: {}", e)
+                        }
                     },
                 }
             }
@@ -161,17 +180,17 @@ impl UI {
                 }
 
                 false
-            },
+            }
             UIMessage::AutosplitterStatus(status) => {
                 self.splitter_status = status;
 
                 false
-            },
+            }
             UIMessage::ConnectionStatus(status) => {
                 self.connection_status = status;
 
                 false
-            },
+            }
             UIMessage::Stop => true,
         }
     }

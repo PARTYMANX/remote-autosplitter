@@ -15,11 +15,13 @@ pub enum LiveSplitServerMessage {
     TimerPauseGameTime,
     TimerResumeGameTime,
     TimerGetState,
+    ChangeAddress(String),
     Stop,
 }
 
 pub enum AutosplitterMessage {
     TimerGetStateResponse(livesplit_auto_splitting::TimerState, u32),
+    ChangeFile(String),
     Stop,
 }
 

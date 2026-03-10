@@ -5,7 +5,12 @@ mod ui;
 
 use std::{env, sync::mpsc, thread};
 
-use crate::{autosplitter::Autosplitter, client::LiveSplitClient, message::{AutosplitterMessage, LiveSplitServerMessage, RoutedMessage}, ui::UI};
+use crate::{
+    autosplitter::Autosplitter,
+    client::LiveSplitClient,
+    message::{AutosplitterMessage, LiveSplitServerMessage, RoutedMessage},
+    ui::UI,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -21,12 +26,12 @@ fn main() {
     let (main_sender, main_receiver) = mpsc::channel();
 
     let (client_sender, client_receiver) = mpsc::channel();
-    let client = LiveSplitClient::new(address, client_receiver, main_sender.clone());
+    let mut client = LiveSplitClient::new(address, client_receiver, main_sender.clone());
 
     let client_thread = thread::spawn(move || client.run());
 
     let (autosplitter_sender, autosplitter_receiver) = mpsc::channel();
-    let autosplitter = Autosplitter::new(filepath, autosplitter_receiver, main_sender.clone());
+    let mut autosplitter = Autosplitter::new(filepath, autosplitter_receiver, main_sender.clone());
 
     let autosplitter_thread = thread::spawn(move || autosplitter.run());
 
@@ -44,8 +49,8 @@ fn main() {
             RoutedMessage::Quit => {
                 client_sender.send(LiveSplitServerMessage::Stop).unwrap();
                 autosplitter_sender.send(AutosplitterMessage::Stop).unwrap();
-                break
-            },
+                break;
+            }
         }
     }
 
