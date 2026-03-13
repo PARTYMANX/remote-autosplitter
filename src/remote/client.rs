@@ -6,7 +6,7 @@ use std::{
 
 use livesplit_auto_splitting::TimerState;
 
-use crate::message::{
+use super::message::{
     AutosplitterMessage, ConnectionStatus, LiveSplitServerMessage, RoutedMessage, UIMessage,
 };
 
@@ -115,16 +115,18 @@ impl LiveSplitClient {
     }
 
     fn handle_offline_message_timeout(&self) -> Result<(), ExitReason> {
-        match self
-            .receiver
-            .recv_timeout(std::time::Duration::ZERO)
-            .unwrap()
-        {
-            LiveSplitServerMessage::ChangeAddress(new_address) => {
-                Err(ExitReason::ChangeAddress(new_address))
-            }
-            LiveSplitServerMessage::Stop => Err(ExitReason::RequestedStop),
-            _ => Ok(()),
+        match self.receiver.try_recv() {
+            Ok(msg) => match msg {
+                LiveSplitServerMessage::ChangeAddress(new_address) => {
+                    Err(ExitReason::ChangeAddress(new_address))
+                }
+                LiveSplitServerMessage::Stop => Err(ExitReason::RequestedStop),
+                _ => Ok(()),
+            },
+            Err(e) => match e {
+                mpsc::TryRecvError::Empty => Ok(()),
+                mpsc::TryRecvError::Disconnected => todo!(),
+            },
         }
     }
 

@@ -7,7 +7,7 @@ use std::{
 
 use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState};
 
-use crate::message::{
+use super::message::{
     AutosplitterMessage, AutosplitterStatus, LiveSplitServerMessage, RoutedMessage, UIMessage,
 };
 
@@ -72,7 +72,7 @@ impl Autosplitter {
                 file.read_to_end(&mut filebuf).unwrap();
             }
             Err(err) => {
-                println!("Failed to open {}: {}", self.filepath, err);
+                self.log(format!("Failed to open {}: {}", self.filepath, err));
                 return ExitReason::SplitterPanic;
             }
         }
@@ -163,14 +163,13 @@ impl Autosplitter {
     }
 
     fn handle_offline_message(&self) -> Result<(), ExitReason> {
-        match self
-            .receiver
-            .recv_timeout(std::time::Duration::ZERO)
-            .unwrap()
-        {
-            AutosplitterMessage::ChangeFile(new_file) => Err(ExitReason::ChangeFile(new_file)),
-            AutosplitterMessage::Stop => Err(ExitReason::RequestedStop),
-            _ => Ok(()),
+        match self.receiver.recv() {
+            Ok(msg) => match msg {
+                AutosplitterMessage::ChangeFile(new_file) => Err(ExitReason::ChangeFile(new_file)),
+                AutosplitterMessage::Stop => Err(ExitReason::RequestedStop),
+                _ => Ok(()),
+            },
+            Err(e) => todo!(),
         }
     }
 
