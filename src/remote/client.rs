@@ -50,6 +50,7 @@ impl LiveSplitClient {
                     ExitReason::RequestedStop => break,
                 }
             } else {
+                println!("Running connection offline message");
                 match self.handle_offline_message() {
                     Ok(_) => {}
                     Err(e) => match e {
@@ -81,6 +82,8 @@ impl LiveSplitClient {
                     Ok(_) => ExitReason::LostConnection,
                     Err(e) => e,
                 }
+
+                // TODO: delay a bit if the failure was immediate so we can prevent flooding (probably 16ms)
             }
         };
 
@@ -105,12 +108,14 @@ impl LiveSplitClient {
     }
 
     fn handle_offline_message(&self) -> Result<(), ExitReason> {
-        match self.receiver.recv().unwrap() {
-            LiveSplitServerMessage::ChangeAddress(new_address) => {
-                Err(ExitReason::ChangeAddress(new_address))
+        loop {
+            match self.receiver.recv().unwrap() {
+                LiveSplitServerMessage::ChangeAddress(new_address) => {
+                    return Err(ExitReason::ChangeAddress(new_address))
+                }
+                LiveSplitServerMessage::Stop => return Err(ExitReason::RequestedStop),
+                _ => {},
             }
-            LiveSplitServerMessage::Stop => Err(ExitReason::RequestedStop),
-            _ => Ok(()),
         }
     }
 

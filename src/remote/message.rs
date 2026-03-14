@@ -4,6 +4,7 @@ pub enum RoutedMessage {
     Client(LiveSplitServerMessage),
     Autosplitter(AutosplitterMessage),
     UI(UIMessage),
+    SetWaker(std::task::Waker),
     Quit,
 }
 
@@ -34,12 +35,14 @@ pub enum UIMessage {
     Stop,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutosplitterStatus {
     NotRunning,
     Running,
     Attached,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disconnected,
     Connecting,
@@ -51,6 +54,7 @@ pub struct MessageRouter {
     autosplitter_sender: mpsc::Sender<AutosplitterMessage>,
     ui_sender: mpsc::Sender<UIMessage>,
     receiver: mpsc::Receiver<RoutedMessage>,
+    waker: Option<std::task::Waker>,    // waker for UI message polling
 }
 
 impl MessageRouter {
@@ -65,10 +69,11 @@ impl MessageRouter {
             autosplitter_sender,
             ui_sender,
             receiver,
+            waker: None,
         }
     }
 
-    pub fn run(&self) {
+    pub fn run(&mut self) {
         loop {
             let dst = self.receiver.recv().unwrap();
             let should_quit = self.handle_message(dst);
@@ -79,17 +84,32 @@ impl MessageRouter {
         }
     }
 
-    fn handle_message(&self, dst: RoutedMessage) -> bool {
+    fn handle_message(&mut self, dst: RoutedMessage) -> bool {
+        
         match dst {
             RoutedMessage::Client(msg) => self.client_sender.send(msg).unwrap(),
             RoutedMessage::Autosplitter(msg) => self.autosplitter_sender.send(msg).unwrap(),
-            RoutedMessage::UI(msg) => self.ui_sender.send(msg).unwrap(),
+            RoutedMessage::UI(msg) => {
+                if let Some(waker) = &self.waker {
+                    waker.wake_by_ref();
+                    self.waker = None;
+                }
+                self.ui_sender.send(msg).unwrap()
+            },
+            RoutedMessage::SetWaker(waker) => self.waker = Some(waker),
             RoutedMessage::Quit => {
+                if let Some(waker) = &self.waker {
+                    waker.wake_by_ref();
+                    self.waker = None;
+                }
                 self.client_sender
                     .send(LiveSplitServerMessage::Stop)
                     .unwrap();
                 self.autosplitter_sender
                     .send(AutosplitterMessage::Stop)
+                    .unwrap();
+                self.ui_sender
+                    .send(UIMessage::Stop)
                     .unwrap();
                 return true;
             }

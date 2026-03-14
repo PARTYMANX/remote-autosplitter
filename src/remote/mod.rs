@@ -39,7 +39,7 @@ impl Remote {
 
         let (ui_sender, ui_receiver) = mpsc::channel();
 
-        let router = MessageRouter::new(
+        let mut router = MessageRouter::new(
             client_sender,
             autosplitter_sender,
             ui_sender,
@@ -74,7 +74,7 @@ impl Remote {
 
 impl Drop for Remote {
     fn drop(&mut self) {
-        self.router_sender.send(RoutedMessage::Quit).unwrap();
+        //self.router_sender.send(RoutedMessage::Quit).unwrap();
 
         if let Some(router_thread) = self.router_thread.take() {
             router_thread.join().unwrap();

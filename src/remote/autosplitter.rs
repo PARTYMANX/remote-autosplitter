@@ -55,7 +55,10 @@ impl Autosplitter {
                     Ok(_) => {}
                     Err(e) => match e {
                         ExitReason::SplitterPanic => {}
-                        ExitReason::ChangeFile(new_file) => self.filepath = new_file,
+                        ExitReason::ChangeFile(new_file) => {
+                            println!("File changed! {}", new_file);
+                            self.filepath = new_file
+                        },
                         ExitReason::RequestedStop => break,
                     },
                 }
@@ -104,11 +107,12 @@ impl Autosplitter {
         match compiled_splitter.instantiate(timer, Some(settings_map), None) {
             Ok(splitter) => {
                 let result = self.run_splitter(&splitter, &timer_state);
-                self.sender
+
+                // Ignore result of send here, chances are that we're exiting.
+                let _ = self.sender
                     .send(RoutedMessage::UI(UIMessage::AutosplitterStatus(
                         AutosplitterStatus::NotRunning,
-                    )))
-                    .unwrap();
+                    )));
 
                 return result;
             }
@@ -125,6 +129,7 @@ impl Autosplitter {
         timer_state: &Arc<Mutex<(TimerState, u32)>>,
     ) -> ExitReason {
         let mut next_run_time = Instant::now();
+        let mut prev_state = AutosplitterStatus::NotRunning;
         loop {
             let mut status = AutosplitterStatus::Running;
 
@@ -151,9 +156,14 @@ impl Autosplitter {
             self.sender
                 .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
                 .unwrap();
-            self.sender
-                .send(RoutedMessage::UI(UIMessage::AutosplitterStatus(status)))
-                .unwrap();
+
+            if status != prev_state {
+                self.sender
+                    .send(RoutedMessage::UI(UIMessage::AutosplitterStatus(status)))
+                    .unwrap();
+
+                prev_state = status;
+            }
 
             match self.wait_poll_messages(next_run_time, &timer_state) {
                 Ok(_) => {}
@@ -163,13 +173,10 @@ impl Autosplitter {
     }
 
     fn handle_offline_message(&self) -> Result<(), ExitReason> {
-        match self.receiver.recv() {
-            Ok(msg) => match msg {
-                AutosplitterMessage::ChangeFile(new_file) => Err(ExitReason::ChangeFile(new_file)),
-                AutosplitterMessage::Stop => Err(ExitReason::RequestedStop),
-                _ => Ok(()),
-            },
-            Err(e) => todo!(),
+        match self.receiver.recv().unwrap() {
+            AutosplitterMessage::ChangeFile(new_file) => Err(ExitReason::ChangeFile(new_file)),
+            AutosplitterMessage::Stop => Err(ExitReason::RequestedStop),
+            _ => Ok(()),
         }
     }
 
