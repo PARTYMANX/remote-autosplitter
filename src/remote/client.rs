@@ -51,7 +51,7 @@ impl LiveSplitClient {
                 }
             } else {
                 println!("Running connection offline message");
-                match self.handle_offline_message() {
+                match self.handle_offline_messages() {
                     Ok(_) => {}
                     Err(e) => match e {
                         ExitReason::LostConnection => {}
@@ -71,19 +71,21 @@ impl LiveSplitClient {
             .unwrap();
         self.log(format!("Connecting to {}...", self.address));
 
+        let failure_continue_time = std::time::Instant::now() + std::time::Duration::from_secs_f64(1.0 / 60.0);
+
         let result = match net::TcpStream::connect(&self.address) {
             Ok(mut socket) => self.handle_messages(&mut socket),
             Err(e) => {
                 self.log(format!("Failed to connect to {}: {}", self.address, e));
 
                 // handle any messages that work offline (stop or change address)
+                // also wait a bit if the connection failed instantly to prevent
+                // flooding messages
                 // is there a way to interrupt a connection attempt for one of these?
-                match self.handle_offline_message_timeout() {
+                match self.wait_poll_offline_messages(failure_continue_time) {
                     Ok(_) => ExitReason::LostConnection,
                     Err(e) => e,
                 }
-
-                // TODO: delay a bit if the failure was immediate so we can prevent flooding (probably 16ms)
             }
         };
 
@@ -107,31 +109,56 @@ impl LiveSplitClient {
         }
     }
 
-    fn handle_offline_message(&self) -> Result<(), ExitReason> {
+    fn handle_offline_messages(&self) -> Result<(), ExitReason> {
+        // messages until stop or address changes since we're not attempting a connection
         loop {
             match self.receiver.recv().unwrap() {
                 LiveSplitServerMessage::ChangeAddress(new_address) => {
                     return Err(ExitReason::ChangeAddress(new_address))
                 }
                 LiveSplitServerMessage::Stop => return Err(ExitReason::RequestedStop),
+                // ignore all other messages since we're not connected
                 _ => {},
             }
         }
     }
 
-    fn handle_offline_message_timeout(&self) -> Result<(), ExitReason> {
-        match self.receiver.try_recv() {
-            Ok(msg) => match msg {
-                LiveSplitServerMessage::ChangeAddress(new_address) => {
-                    Err(ExitReason::ChangeAddress(new_address))
+    fn wait_poll_offline_messages(
+        &self,
+        target: std::time::Instant,
+    ) -> Result<(), ExitReason> {
+        let mut cur_time = std::time::Instant::now();
+        while cur_time < target {
+            cur_time = std::time::Instant::now();
+
+            if target - cur_time > std::time::Duration::from_millis(3) {
+                match self
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_millis(1))
+                {
+                    Ok(message) => match Self::handle_offline_message(message) {
+                        Ok(_) => {}
+                        Err(e) => return Err(e),
+                    },
+                    Err(e) => match e {
+                        mpsc::RecvTimeoutError::Timeout => {}
+                        mpsc::RecvTimeoutError::Disconnected => {
+                            panic!("Receiver disconnected! Error: {}", e)
+                        }
+                    },
                 }
-                LiveSplitServerMessage::Stop => Err(ExitReason::RequestedStop),
-                _ => Ok(()),
-            },
-            Err(e) => match e {
-                mpsc::TryRecvError::Empty => Ok(()),
-                mpsc::TryRecvError::Disconnected => todo!(),
-            },
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_offline_message(msg: LiveSplitServerMessage) -> Result<(), ExitReason> {
+        match msg {
+            LiveSplitServerMessage::ChangeAddress(new_address) => Err(ExitReason::ChangeAddress(new_address)),
+            LiveSplitServerMessage::Stop => Err(ExitReason::RequestedStop),
+            // ignore all other messages since we're not connected
+            _ => Ok(()),
         }
     }
 

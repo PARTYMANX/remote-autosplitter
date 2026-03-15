@@ -1,11 +1,10 @@
 use std::{
-    fmt, fs,
-    io::Read,
-    sync::{Arc, Mutex, mpsc},
-    time::Instant,
+    fmt, fs, hash::{Hash, Hasher}, io::Read, sync::{Arc, Mutex, mpsc}, time::Instant
 };
 
-use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState};
+use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState, settings::WidgetKind};
+
+use crate::remote::message::{AutosplitterComboboxChoice, AutosplitterSetting, SettingType};
 
 use super::message::{
     AutosplitterMessage, AutosplitterStatus, LiveSplitServerMessage, RoutedMessage, UIMessage,
@@ -106,6 +105,14 @@ impl Autosplitter {
 
         match compiled_splitter.instantiate(timer, Some(settings_map), None) {
             Ok(splitter) => {
+                for setting in splitter.settings_map().iter() {
+                    println!("Splitter setting: {}: {:?}", setting.0, setting.1);
+                }
+
+                for widget in splitter.settings_widgets().iter() {
+                    println!("Splitter widget: {}", widget.key);
+                }
+
                 let result = self.run_splitter(&splitter, &timer_state);
 
                 // Ignore result of send here, chances are that we're exiting.
@@ -130,6 +137,7 @@ impl Autosplitter {
     ) -> ExitReason {
         let mut next_run_time = Instant::now();
         let mut prev_state = AutosplitterStatus::NotRunning;
+        let mut prev_settings_hash = None;
         loop {
             let mut status = AutosplitterStatus::Running;
 
@@ -155,7 +163,52 @@ impl Autosplitter {
             // we'll get the response when polling the receiver
             self.sender
                 .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
-                .unwrap();
+                .unwrap();  // TODO: fix panic here on exit
+
+            // send widget data here
+            let mut hasher = std::hash::DefaultHasher::new();
+            for widget in splitter.settings_widgets().iter() {
+                widget.key.hash(&mut hasher);
+            }
+            let settings_hash = Some(hasher.finish());
+            
+            if settings_hash != prev_settings_hash {
+                // TODO: put this in another function
+                prev_settings_hash = settings_hash;
+
+                let mut settings = Vec::new();
+                for widget in splitter.settings_widgets().iter() {
+                    println!("Splitter widget: {}: {} {:?}", widget.key, widget.description, widget.tooltip);
+                    let setting = AutosplitterSetting {
+                        key: widget.key.to_string(),
+                        description: widget.description.to_string(),
+                        tooltip: match &widget.tooltip {
+                            Some(v) => Some(v.to_string()),
+                            None => None,
+                        },
+                        ty: match &widget.kind {
+                            WidgetKind::Title { heading_level } => SettingType::Heading(*heading_level),
+                            WidgetKind::Bool { default_value } => SettingType::Checkbox(*default_value),
+                            WidgetKind::Choice { default_option_key, options } => {
+                                let mut our_options = Vec::new();
+                                for option in options.iter() {
+                                    our_options.push(AutosplitterComboboxChoice {
+                                        key: option.key.to_string(),
+                                        description: option.description.to_string(),
+                                    });
+                                }
+                                
+                                SettingType::Combobox(default_option_key.to_string(), our_options)
+                            },
+                            WidgetKind::FileSelect { filters: _ } => SettingType::FilePicker,
+                        },
+                    };
+
+                    settings.push(setting);
+                }
+
+                self.sender.send(RoutedMessage::UI(UIMessage::AutosplitterSettings(settings))).unwrap();
+            }
 
             if status != prev_state {
                 self.sender

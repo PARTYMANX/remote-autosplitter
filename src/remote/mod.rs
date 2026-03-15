@@ -8,7 +8,7 @@ use std::{
 };
 
 pub use message::{
-    AutosplitterMessage, AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage,
+    AutosplitterMessage, AutosplitterStatus, AutosplitterSetting, SettingType, AutosplitterComboboxChoice, ConnectionStatus, LiveSplitServerMessage,
     RoutedMessage, UIMessage,
 };
 
@@ -74,8 +74,6 @@ impl Remote {
 
 impl Drop for Remote {
     fn drop(&mut self) {
-        //self.router_sender.send(RoutedMessage::Quit).unwrap();
-
         if let Some(router_thread) = self.router_thread.take() {
             router_thread.join().unwrap();
         }

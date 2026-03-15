@@ -32,6 +32,7 @@ pub enum UIMessage {
     Log(String),
     AutosplitterStatus(AutosplitterStatus),
     ConnectionStatus(ConnectionStatus),
+    AutosplitterSettings(Vec<AutosplitterSetting>),
     Stop,
 }
 
@@ -47,6 +48,28 @@ pub enum ConnectionStatus {
     Disconnected,
     Connecting,
     Connected,
+}
+
+#[derive(Debug, Clone)]
+pub enum SettingType {
+    Heading(u32),
+    Checkbox(bool),
+    Combobox(String, Vec<AutosplitterComboboxChoice>),
+    FilePicker, // ignoring filter for now
+}
+
+#[derive(Debug, Clone)]
+pub struct AutosplitterComboboxChoice {
+    pub key: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutosplitterSetting {
+    pub key: String,
+    pub description: String,
+    pub tooltip: Option<String>,
+    pub ty: SettingType,
 }
 
 pub struct MessageRouter {

@@ -1,7 +1,7 @@
 mod remote;
 mod ui;
 
-use std::{env, sync::mpsc, thread};
+use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
