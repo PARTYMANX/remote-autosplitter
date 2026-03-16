@@ -1,4 +1,4 @@
-use std::sync::mpsc;
+use std::{fmt::Display, sync::mpsc};
 
 pub enum RoutedMessage {
     Client(LiveSplitServerMessage),
@@ -58,10 +58,16 @@ pub enum SettingType {
     FilePicker, // ignoring filter for now
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutosplitterComboboxChoice {
     pub key: String,
     pub description: String,
+}
+
+impl Display for AutosplitterComboboxChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
 }
 
 #[derive(Debug, Clone)]

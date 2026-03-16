@@ -1,7 +1,7 @@
-use std::{ops::Index, sync::mpsc};
+use std::{collections::HashMap, ops::Index, sync::mpsc};
 
 use iced::{
-    Element, Font, Length, Settings, Subscription, Task, color, futures::Stream, widget::{Container, button, checkbox, column, combo_box, container, row, scrollable, text, text_input, tooltip}, window
+    Element, Font, Length, Settings, Subscription, Task, color, futures::Stream, widget::{Container, button, checkbox, column, container, pick_list, row, scrollable, text, text_input, tooltip}, window
 };
 
 use crate::remote::{AutosplitterSetting, AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage, Remote, RoutedMessage, UIMessage};
@@ -22,10 +22,19 @@ pub fn run_remote_app(autosplitter_filepath: String, server_url: String) {
         ..Default::default()
     };
 
+    let window_settings = window::Settings {
+        min_size: Some(iced::Size {
+            width: 640.0,
+            height: 480.0,
+        }),
+        exit_on_close_request: false,
+        ..Default::default()
+    };
+
     let app = iced::application(boot, RemoteApp::update, RemoteApp::view)
-        .exit_on_close_request(false)
         .subscription(RemoteApp::subscription)
         .settings(settings)
+        .window(window_settings)
         .title("Remote Autosplitter");
 
     app.run().unwrap();
@@ -33,13 +42,22 @@ pub fn run_remote_app(autosplitter_filepath: String, server_url: String) {
     println!("Done!");
 }
 
+#[derive(Clone)]
+enum AutosplitterSettingValue {
+    Checkbox(bool),
+    Combobox(String),
+    FilePicker(String),
+}
+
 pub struct RemoteApp {
     server_address: String,
     connection_status: ConnectionStatus,
     connect_button_awaiting_state: bool,
 
+    autosplitter_path: String,
     autosplitter_status: AutosplitterStatus,
     autosplitter_settings: Vec<AutosplitterSetting>,
+    autosplitter_current_settings: HashMap<String, AutosplitterSettingValue>,
 
     log_lines: RingBuffer<String>,
 
@@ -50,7 +68,14 @@ pub struct RemoteApp {
 pub enum Message {
     WindowEvent((window::Id, window::Event)),
 
-    LoadSplitter,
+    AutosplitterPathEdit(String),
+    AutosplitterPathSelect,
+    AutosplitterRun,
+    AutosplitterStop,
+    AutosplitterSettingCheckbox(String, bool),
+    AutosplitterSettingCombobox(String, String),
+    AutosplitterSettingFilepathEdit(String, String),
+    AutosplitterSettingFilepathSelect(String),
 
     AddressEdit(String),
     AddressSubmit,
@@ -75,8 +100,10 @@ impl RemoteApp {
             server_address: "".to_string(),
             connection_status: ConnectionStatus::Disconnected,
             connect_button_awaiting_state: false,
+            autosplitter_path: "".to_string(),
             autosplitter_status: AutosplitterStatus::NotRunning,
             autosplitter_settings: Vec::new(),
+            autosplitter_current_settings: HashMap::new(),
             log_lines,
             sender,
         }
@@ -151,34 +178,183 @@ impl RemoteApp {
     fn view_autosplitter_panel(&self) -> Container<'_, Message> {
         container(
             column![
-                button("Load Autosplitter...").on_press(Message::LoadSplitter),
-                scrollable(
-                    column(
-                        self.autosplitter_settings.iter().map(Self::view_autosplitter_setting)
-                    ),
-                ).width(Length::Fill)
-                .height(Length::Fill),
-            ]
+                self.view_autosplitter_file_select(),
+                self.view_autosplitter_run(),
+                self.view_autosplitter_settings(),
+            ].spacing(8)
             
         ).padding(8).width(250)
     }
 
-    fn view_autosplitter_setting(setting: &AutosplitterSetting) -> Element<'_, Message> {
-        let element = match &setting.ty {
-            crate::remote::SettingType::Heading(_) => {
+    fn view_autosplitter_file_select(&self) -> Container<'_, Message> {
+        let (file_path_input, button) = match self.autosplitter_status {
+            AutosplitterStatus::NotRunning => {
+                let file_path_input = text_input("File Path", &self.autosplitter_path)
+                    .on_input(Message::AutosplitterPathEdit)
+                    .on_paste(Message::AutosplitterPathEdit);
+
+                let button = button("Select...")
+                    .on_press(Message::AutosplitterPathSelect);
+
+                (file_path_input, button)
+            },
+            AutosplitterStatus::Running |
+            AutosplitterStatus::Attached => {
+                let file_path_input = text_input("File Path", &self.autosplitter_path);
+
+                let button = button("Select...");
+
+                (file_path_input, button)
+            }
+        };
+
+        container(
+            column![
+                text("ASR Script File:"),
+                row![
+                    file_path_input,
+                    button
+                ]
+            ].spacing(8)
+        ).width(Length::Fill)
+    }
+
+    fn view_autosplitter_run(&self) -> Container<'_, Message> {
+        let button = match self.autosplitter_status {
+            AutosplitterStatus::NotRunning => {
+                if self.autosplitter_path.trim().is_empty() {
+                    button("Run Autosplitter")
+                        .width(Length::Fill)
+                } else {
+                    button("Run Autosplitter")
+                        .on_press(Message::AutosplitterRun)
+                        .width(Length::Fill)
+                }
+            },
+            AutosplitterStatus::Running |
+            AutosplitterStatus::Attached => {
+                if self.autosplitter_path.trim().is_empty() {
+                    button("Stop Autosplitter")
+                        .style(button::danger)
+                        .width(Length::Fill)
+                } else {
+                    button("Stop Autosplitter")
+                        .on_press(Message::AutosplitterStop)
+                        .style(button::danger)
+                        .width(Length::Fill)
+                }
+            },
+        };
+
+        container(
+            button
+        ).width(Length::Fill)
+    }
+
+    // A total mess. Trying to support dynamically defined settings is difficult!
+    fn view_autosplitter_settings(&self) -> Container<'_, Message> {
+        let mut settings = Vec::new();
+        for setting in &self.autosplitter_settings {
+            let value = self.autosplitter_current_settings.get(&setting.key);
+            // I hate cloning the value here but we don't get too many options...
+            let element = Self::view_autosplitter_setting(setting, value.cloned());
+
+            settings.push(element);
+        }
+
+        container(
+            scrollable(
+                column(settings),
+            ).width(Length::Fill).height(Length::Fill)
+        )
+    }
+
+    fn view_autosplitter_setting(setting: &AutosplitterSetting, current_value: Option<AutosplitterSettingValue>) -> Element<'_, Message> {
+        let element: Element<'_, Message> = match &setting.ty {
+            crate::remote::SettingType::Heading(level) => {
+                // this is probably wrong but sizes for levels
+                let size = match level {
+                    1 => 20.0,
+                    2 => 18.0,
+                    3 => 17.0,
+                    4 => 16.0,
+                    5 => 15.0,
+                    6 => 14.0,
+                    _ => 14.0,
+                };
+                
                 container(
                     text(setting.description.clone())
+                        .size(size)
                 ).into()
             },
-            crate::remote::SettingType::Checkbox(_) => {
+            crate::remote::SettingType::Checkbox(default) => {
+                let value = if let Some(current_value) = current_value {
+                    match current_value {
+                        AutosplitterSettingValue::Checkbox(v) => v,
+                        AutosplitterSettingValue::Combobox(_) |
+                        AutosplitterSettingValue::FilePicker(_) => *default,
+                    }
+                } else {
+                    *default
+                };
+
                 container(
-                    checkbox(false)
+                    checkbox(value)
                         .label(setting.description.clone())
-                        //.on_toggle(f)
-                )
+                        .on_toggle(|v| Message::AutosplitterSettingCheckbox(setting.key.clone(), v))
+                ).into()
             },
-            crate::remote::SettingType::Combobox(_, autosplitter_combobox_choices) => todo!(),
-            crate::remote::SettingType::FilePicker => todo!(),
+            crate::remote::SettingType::Combobox(default, autosplitter_combobox_choices) => {
+                let current_key = if let Some(current_value) = current_value {
+                    match current_value {
+                        AutosplitterSettingValue::Combobox(v) => v,
+                        AutosplitterSettingValue::Checkbox(_) |
+                        AutosplitterSettingValue::FilePicker(_) => default.clone(),
+                    }
+                } else {
+                    default.clone()
+                };
+
+                let value = match autosplitter_combobox_choices.iter().find(|v| v.key == current_key) {
+                    Some(v) => Some(v.clone()),
+                    None => None,
+                };
+
+                let combobox = pick_list(autosplitter_combobox_choices.clone(), value, |v| Message::AutosplitterSettingCombobox(setting.key.clone(), v.key));
+
+                container(
+                    combobox
+                ).into()
+            },
+            crate::remote::SettingType::FilePicker => {
+                let value = if let Some(current_value) = current_value {
+                    match current_value {
+                        AutosplitterSettingValue::Checkbox(_) |
+                        AutosplitterSettingValue::Combobox(_) => "".to_string(),
+                        AutosplitterSettingValue::FilePicker(v) => v,
+                    }
+                } else {
+                    "".to_string()
+                };
+
+                let file_path_input = text_input("File Path", &value)
+                    .on_input(|v| Message::AutosplitterSettingFilepathEdit(setting.key.clone(), v))
+                    .on_paste(|v| Message::AutosplitterSettingFilepathEdit(setting.key.clone(), v));
+
+                let button = button("Select...")
+                    .on_press(Message::AutosplitterSettingFilepathSelect(setting.key.clone()));
+
+                container(
+            column![
+                        text(setting.description.clone()),
+                        row![
+                            file_path_input,
+                            button
+                        ]
+                    ].spacing(8)
+                ).width(Length::Fill).into()
+            },
         };
 
         match &setting.tooltip {
@@ -188,7 +364,7 @@ impl RemoteApp {
                     container(text(v.clone())).padding(10).style(container::rounded_box), 
                     tooltip::Position::Bottom).into()
             },
-            None => element.into(),
+            None => element,
         }
     }
 
@@ -217,29 +393,49 @@ impl RemoteApp {
             AutosplitterStatus::Attached => color!(0x0000ff),
         };
 
+        let autosplitter_status_text = match self.autosplitter_status {
+            AutosplitterStatus::NotRunning => "Not running",
+            AutosplitterStatus::Running => "Running",
+            AutosplitterStatus::Attached => "Attached",
+        };
+
         let connection_status_color = match self.connection_status {
             ConnectionStatus::Disconnected => color!(0xff0000),
             ConnectionStatus::Connecting => color!(0xffff00),
             ConnectionStatus::Connected => color!(0x00ff00),
         };
 
+        let connection_status_text = match self.connection_status {
+            ConnectionStatus::Disconnected => "Disconnected",
+            ConnectionStatus::Connecting => "Connecting",
+            ConnectionStatus::Connected => "Connected",
+        };
+
         container(
             row![
-                row![
-                    text("Connection:"),
-                    text("●").color(connection_status_color),
-                ].spacing(8).padding([0, 8]),
-                row![
-                    text("Autosplitter:"),
-                    text("●").color(autosplitter_status_color),
-                ].spacing(8).padding([0, 8]),
+                tooltip(
+                    row![
+                        text("Connection:"),
+                        text("●").color(connection_status_color),
+                    ].spacing(8).padding([0, 8]),
+                    container(text(connection_status_text)).padding(10).style(container::rounded_box),
+                    tooltip::Position::Top,
+                ),
+                tooltip(
+                    row![
+                        text("Autosplitter:"),
+                        text("●").color(autosplitter_status_color),
+                    ].spacing(8).padding([0, 8]),
+                    container(text(autosplitter_status_text)).padding(10).style(container::rounded_box),
+                    tooltip::Position::Top,
+                )
             ]
         ).align_right(Length::Fill).padding(4).style(container::dark)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::LoadSplitter => {
+            Message::AutosplitterPathSelect => {
                 let filepath = rfd::FileDialog::new()
                     .set_title("Select ASR Script")
                     .add_filter("ASR Script", &["wasm"])
@@ -250,7 +446,53 @@ impl RemoteApp {
                 if let Some(path) = filepath {
                     let str = path.to_str().unwrap().to_owned();
 
-                    self.sender.send(RoutedMessage::Autosplitter(crate::remote::AutosplitterMessage::ChangeFile(str))).unwrap();
+                    self.autosplitter_path = str;
+                }
+
+                Task::none()
+            }
+            Message::AutosplitterPathEdit(text) => {
+                self.autosplitter_path = text;
+
+                Task::none()
+            }
+            Message::AutosplitterRun => {
+                self.sender.send(RoutedMessage::Autosplitter(crate::remote::AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()))).unwrap();
+
+                Task::none()
+            }
+            Message::AutosplitterStop => {
+                self.sender.send(RoutedMessage::Autosplitter(crate::remote::AutosplitterMessage::ChangeFile("".to_string()))).unwrap();
+
+                Task::none()
+            }
+            // TODO: next 4: sync settings with autosplitter
+            Message::AutosplitterSettingCheckbox(key, value) => {
+                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Checkbox(value));
+
+                Task::none()
+            }
+            Message::AutosplitterSettingCombobox(key, value_key) => {
+                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Combobox(value_key));
+
+                Task::none()
+            }
+            Message::AutosplitterSettingFilepathEdit(key, text) => {
+                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::FilePicker(text));
+
+                Task::none()
+            }
+            Message::AutosplitterSettingFilepathSelect(key) => {
+                let filepath = rfd::FileDialog::new()
+                    .set_title("Select File")
+                    .add_filter("All Files", &["*"])
+                    .set_directory("/")
+                    .pick_file();
+
+                if let Some(path) = filepath {
+                    let str = path.to_str().unwrap().to_owned();
+
+                    self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::FilePicker(str));
                 }
 
                 Task::none()
