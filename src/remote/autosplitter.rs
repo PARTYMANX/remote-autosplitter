@@ -4,7 +4,7 @@ use std::{
 
 use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState, settings::WidgetKind};
 
-use crate::remote::message::{AutosplitterComboboxChoice, AutosplitterSetting, SettingType};
+use crate::remote::message::{AutosplitterComboboxChoice, AutosplitterSetting, AutosplitterSettingUIValue, SettingType};
 
 use super::message::{
     AutosplitterMessage, AutosplitterStatus, LiveSplitServerMessage, RoutedMessage, UIMessage,
@@ -138,6 +138,7 @@ impl Autosplitter {
         let mut next_run_time = Instant::now();
         let mut prev_state = AutosplitterStatus::NotRunning;
         let mut prev_settings_hash = None;
+        let mut prev_settings_map: Option<livesplit_auto_splitting::settings::Map> = None;
         loop {
             let mut status = AutosplitterStatus::Running;
 
@@ -163,7 +164,7 @@ impl Autosplitter {
             // we'll get the response when polling the receiver
             self.sender
                 .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
-                .unwrap();  // TODO: fix panic here on exit
+                .unwrap();
 
             // send widget data here
             let mut hasher = std::hash::DefaultHasher::new();
@@ -178,7 +179,6 @@ impl Autosplitter {
 
                 let mut settings = Vec::new();
                 for widget in splitter.settings_widgets().iter() {
-                    println!("Splitter widget: {}: {} {:?}", widget.key, widget.description, widget.tooltip);
                     let setting = AutosplitterSetting {
                         key: widget.key.to_string(),
                         description: widget.description.to_string(),
@@ -218,10 +218,46 @@ impl Autosplitter {
                 prev_state = status;
             }
 
-            match self.wait_poll_messages(next_run_time, &timer_state) {
+            // Get updated settings then sync to UI
+            let mut settings_map = splitter.settings_map();
+
+            if let Some(prev_settings) = prev_settings_map {
+                for (key, value) in settings_map.iter() {
+                    let send_value = if let Some(old_value) = prev_settings.get(key) {
+                        if old_value != value {
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        true
+                    };
+
+                    if send_value {
+                        let val = match value {
+                            livesplit_auto_splitting::settings::Value::Map(_) => unimplemented!(),
+                            livesplit_auto_splitting::settings::Value::List(_) => unimplemented!(),
+                            livesplit_auto_splitting::settings::Value::Bool(v) => AutosplitterSettingUIValue::Bool(*v),
+                            livesplit_auto_splitting::settings::Value::I64(_) => unimplemented!(),
+                            livesplit_auto_splitting::settings::Value::F64(_) => unimplemented!(),
+                            livesplit_auto_splitting::settings::Value::String(v) => AutosplitterSettingUIValue::String(v.to_string()),
+                            _ => unimplemented!(),
+                        };
+
+                        self.sender.send(RoutedMessage::UI(UIMessage::UpdateAutosplitterSetting(key.to_string(), val))).unwrap();
+                    }
+                }
+            }
+
+            match self.wait_poll_messages(next_run_time, &timer_state, &mut settings_map) {
                 Ok(_) => {}
                 Err(e) => return e,
             }
+
+            // Sync settings from UI back to the splitter
+            splitter.set_settings_map(settings_map.clone());
+
+            prev_settings_map = Some(settings_map);
         }
     }
 
@@ -240,6 +276,7 @@ impl Autosplitter {
         &self,
         target: std::time::Instant,
         timer_state: &Arc<Mutex<(TimerState, u32)>>,
+        settings_map: &mut livesplit_auto_splitting::settings::Map,
     ) -> Result<(), ExitReason> {
         let mut cur_time = std::time::Instant::now();
         while cur_time < target {
@@ -250,7 +287,7 @@ impl Autosplitter {
                     .receiver
                     .recv_timeout(std::time::Duration::from_millis(1))
                 {
-                    Ok(message) => match self.service_message(message, timer_state) {
+                    Ok(message) => match self.service_message(message, timer_state, settings_map) {
                         Ok(_) => {}
                         Err(e) => return Err(e),
                     },
@@ -271,6 +308,7 @@ impl Autosplitter {
         &self,
         message: AutosplitterMessage,
         timer_state: &Arc<Mutex<(TimerState, u32)>>,
+        settings_map: &mut livesplit_auto_splitting::settings::Map,
     ) -> Result<(), ExitReason> {
         match message {
             AutosplitterMessage::TimerGetStateResponse(state, split_index) => {
@@ -278,6 +316,25 @@ impl Autosplitter {
 
                 lock.0 = state;
                 lock.1 = split_index;
+
+                Ok(())
+            }
+            AutosplitterMessage::UpdateSetting(key, value) => {
+                let splitter_value = match value {
+                    super::AutosplitterSettingValue::Checkbox(v) => {
+                        livesplit_auto_splitting::settings::Value::Bool(v)
+                    },
+                    super::AutosplitterSettingValue::Combobox(v) |
+                    super::AutosplitterSettingValue::FilePicker(v) => {
+                        let string = Arc::from(v.as_str());
+
+                        livesplit_auto_splitting::settings::Value::String(string)
+                    },
+                };
+
+                let splitter_key = Arc::from(key.as_str());
+                
+                settings_map.insert(splitter_key, splitter_value);
 
                 Ok(())
             }

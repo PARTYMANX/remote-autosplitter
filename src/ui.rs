@@ -4,7 +4,7 @@ use iced::{
     Element, Font, Length, Settings, Subscription, Task, color, futures::Stream, widget::{Container, button, checkbox, column, container, pick_list, row, scrollable, text, text_input, tooltip}, window
 };
 
-use crate::remote::{AutosplitterSetting, AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage, Remote, RoutedMessage, UIMessage};
+use crate::remote::{AutosplitterMessage, AutosplitterSetting, AutosplitterSettingUIValue, AutosplitterSettingValue, AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage, Remote, RoutedMessage, UIMessage};
 
 pub fn run_remote_app(autosplitter_filepath: String, server_url: String) {
     let boot = move || {
@@ -40,13 +40,6 @@ pub fn run_remote_app(autosplitter_filepath: String, server_url: String) {
     app.run().unwrap();
 
     println!("Done!");
-}
-
-#[derive(Clone)]
-enum AutosplitterSettingValue {
-    Checkbox(bool),
-    Combobox(String),
-    FilePicker(String),
 }
 
 pub struct RemoteApp {
@@ -85,6 +78,7 @@ pub enum Message {
     ConnectionStatus(ConnectionStatus),
     AutosplitterStatus(AutosplitterStatus),
     AutosplitterSettings(Vec<AutosplitterSetting>),
+    UpdateAutosplitterSetting(String, AutosplitterSettingUIValue),
 
     NoOp,
 }
@@ -457,28 +451,35 @@ impl RemoteApp {
                 Task::none()
             }
             Message::AutosplitterRun => {
-                self.sender.send(RoutedMessage::Autosplitter(crate::remote::AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()))).unwrap();
+                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()))).unwrap();
 
                 Task::none()
             }
             Message::AutosplitterStop => {
-                self.sender.send(RoutedMessage::Autosplitter(crate::remote::AutosplitterMessage::ChangeFile("".to_string()))).unwrap();
+                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::ChangeFile("".to_string()))).unwrap();
+
+                self.autosplitter_settings.clear();
 
                 Task::none()
             }
-            // TODO: next 4: sync settings with autosplitter
             Message::AutosplitterSettingCheckbox(key, value) => {
-                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Checkbox(value));
+                self.autosplitter_current_settings.insert(key.clone(), AutosplitterSettingValue::Checkbox(value));
+
+                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::UpdateSetting(key, AutosplitterSettingValue::Checkbox(value)))).unwrap();
 
                 Task::none()
             }
             Message::AutosplitterSettingCombobox(key, value_key) => {
-                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Combobox(value_key));
+                self.autosplitter_current_settings.insert(key.clone(), AutosplitterSettingValue::Combobox(value_key.clone()));
+
+                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::UpdateSetting(key, AutosplitterSettingValue::Combobox(value_key)))).unwrap();
 
                 Task::none()
             }
             Message::AutosplitterSettingFilepathEdit(key, text) => {
-                self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::FilePicker(text));
+                self.autosplitter_current_settings.insert(key.clone(), AutosplitterSettingValue::FilePicker(text.clone()));
+
+                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::UpdateSetting(key, AutosplitterSettingValue::Combobox(text)))).unwrap();
 
                 Task::none()
             }
@@ -492,7 +493,9 @@ impl RemoteApp {
                 if let Some(path) = filepath {
                     let str = path.to_str().unwrap().to_owned();
 
-                    self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::FilePicker(str));
+                    self.autosplitter_current_settings.insert(key.clone(), AutosplitterSettingValue::FilePicker(str.clone()));
+
+                    self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::UpdateSetting(key, AutosplitterSettingValue::Combobox(str)))).unwrap();
                 }
 
                 Task::none()
@@ -529,6 +532,37 @@ impl RemoteApp {
 
                 Task::none()
             }
+            Message::UpdateAutosplitterSetting(key, value) => {
+                // Find the type of this setting because we have no other way
+                // to determine its type. Bad!
+                for setting in &self.autosplitter_settings {
+                    if setting.key == key {
+                        match &setting.ty {
+                            // something went wrong but we'll just ignore it
+                            crate::remote::SettingType::Heading(_) => {},
+                            crate::remote::SettingType::Checkbox(_) => {
+                                if let AutosplitterSettingUIValue::Bool(v) = value {
+                                    self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Checkbox(v));
+                                }
+                            },
+                            crate::remote::SettingType::Combobox(_, _) => {
+                                if let AutosplitterSettingUIValue::String(v) = value {
+                                    self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::Combobox(v));
+                                }
+                            },
+                            crate::remote::SettingType::FilePicker => {
+                                if let AutosplitterSettingUIValue::String(v) = value {
+                                    self.autosplitter_current_settings.insert(key, AutosplitterSettingValue::FilePicker(v));
+                                }
+                            },
+                        }
+
+                        break;
+                    }
+                }
+
+                Task::none()
+            }
             Message::ConnectionStatus(status) => {
                 if status != self.connection_status {
                     self.connection_status = status;
@@ -541,6 +575,23 @@ impl RemoteApp {
             Message::WindowEvent((id, event)) => {
                 match event {
                     window::Event::CloseRequested => {
+                        // Get the other threads ready for shutdown
+                        match self.autosplitter_status {
+                            AutosplitterStatus::Attached |
+                            AutosplitterStatus::Running => {
+                                self.sender.send(RoutedMessage::Autosplitter(AutosplitterMessage::ChangeFile("".to_string()))).unwrap();
+                            }
+                            AutosplitterStatus::NotRunning => {}
+                        }
+
+                        match self.connection_status {
+                            ConnectionStatus::Connecting |
+                            ConnectionStatus::Connected => {
+                                self.sender.send(RoutedMessage::Client(LiveSplitServerMessage::ChangeAddress("".to_string()))).unwrap();
+                            }
+                            ConnectionStatus::Disconnected => {}
+                        }
+
                         self.sender.send(RoutedMessage::Quit).unwrap();
 
                         window::close(id)
@@ -580,6 +631,9 @@ impl RemoteApp {
             },
             UIMessage::AutosplitterSettings(settings) => {
                 Message::AutosplitterSettings(settings)
+            }
+            UIMessage::UpdateAutosplitterSetting(key, value) => {
+                Message::UpdateAutosplitterSetting(key, value)
             }
             UIMessage::Stop => unreachable!(""),
         }

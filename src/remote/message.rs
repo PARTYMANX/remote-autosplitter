@@ -25,6 +25,7 @@ pub enum LiveSplitServerMessage {
 pub enum AutosplitterMessage {
     TimerGetStateResponse(livesplit_auto_splitting::TimerState, u32),
     ChangeFile(String),
+    UpdateSetting(String, AutosplitterSettingValue),
     Stop,
 }
 
@@ -33,6 +34,7 @@ pub enum UIMessage {
     AutosplitterStatus(AutosplitterStatus),
     ConnectionStatus(ConnectionStatus),
     AutosplitterSettings(Vec<AutosplitterSetting>),
+    UpdateAutosplitterSetting(String, AutosplitterSettingUIValue),
     Stop,
 }
 
@@ -76,6 +78,24 @@ pub struct AutosplitterSetting {
     pub description: String,
     pub tooltip: Option<String>,
     pub ty: SettingType,
+}
+
+#[derive(Debug, Clone)]
+pub enum AutosplitterSettingValue {
+    Checkbox(bool),
+    Combobox(String),
+    FilePicker(String),
+}
+
+/// Stores a bool or string to represent the value of an autosplitter setting
+/// returning to the UI.
+/// 
+/// Autosplitters use strings for two of their values, so we'll just match it
+/// with the type in the UI. Kind of a mess.
+#[derive(Debug, Clone)]
+pub enum AutosplitterSettingUIValue {
+    Bool(bool),
+    String(String),
 }
 
 pub struct MessageRouter {

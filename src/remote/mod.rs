@@ -8,7 +8,7 @@ use std::{
 };
 
 pub use message::{
-    AutosplitterMessage, AutosplitterStatus, AutosplitterSetting, SettingType, AutosplitterComboboxChoice, ConnectionStatus, LiveSplitServerMessage,
+    AutosplitterMessage, AutosplitterStatus, AutosplitterSetting, SettingType, AutosplitterSettingValue, AutosplitterSettingUIValue, ConnectionStatus, LiveSplitServerMessage,
     RoutedMessage, UIMessage,
 };
 
