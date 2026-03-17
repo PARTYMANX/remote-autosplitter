@@ -8,8 +8,9 @@ use std::{
 };
 
 pub use message::{
-    AutosplitterMessage, AutosplitterStatus, AutosplitterSetting, SettingType, AutosplitterSettingValue, AutosplitterSettingUIValue, ConnectionStatus, LiveSplitServerMessage,
-    RoutedMessage, UIMessage,
+    AutosplitterMessage, AutosplitterSetting, AutosplitterSettingUIValue, AutosplitterSettingValue,
+    AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage, RoutedMessage, SettingType,
+    UIMessage,
 };
 
 use crate::remote::{autosplitter::Autosplitter, client::LiveSplitClient, message::MessageRouter};

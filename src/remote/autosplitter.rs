@@ -1,10 +1,16 @@
 use std::{
-    fmt, fs, hash::{Hash, Hasher}, io::Read, sync::{Arc, Mutex, mpsc}, time::Instant
+    fmt, fs,
+    hash::{Hash, Hasher},
+    io::Read,
+    sync::{Arc, Mutex, mpsc},
+    time::Instant,
 };
 
 use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState, settings::WidgetKind};
 
-use crate::remote::message::{AutosplitterComboboxChoice, AutosplitterSetting, AutosplitterSettingUIValue, SettingType};
+use crate::remote::message::{
+    AutosplitterComboboxChoice, AutosplitterSetting, AutosplitterSettingUIValue, SettingType,
+};
 
 use super::message::{
     AutosplitterMessage, AutosplitterStatus, LiveSplitServerMessage, RoutedMessage, UIMessage,
@@ -57,7 +63,7 @@ impl Autosplitter {
                         ExitReason::ChangeFile(new_file) => {
                             println!("File changed! {}", new_file);
                             self.filepath = new_file
-                        },
+                        }
                         ExitReason::RequestedStop => break,
                     },
                 }
@@ -116,7 +122,8 @@ impl Autosplitter {
                 let result = self.run_splitter(&splitter, &timer_state);
 
                 // Ignore result of send here, chances are that we're exiting.
-                let _ = self.sender
+                let _ = self
+                    .sender
                     .send(RoutedMessage::UI(UIMessage::AutosplitterStatus(
                         AutosplitterStatus::NotRunning,
                     )));
@@ -172,7 +179,7 @@ impl Autosplitter {
                 widget.key.hash(&mut hasher);
             }
             let settings_hash = Some(hasher.finish());
-            
+
             if settings_hash != prev_settings_hash {
                 // TODO: put this in another function
                 prev_settings_hash = settings_hash;
@@ -187,9 +194,16 @@ impl Autosplitter {
                             None => None,
                         },
                         ty: match &widget.kind {
-                            WidgetKind::Title { heading_level } => SettingType::Heading(*heading_level),
-                            WidgetKind::Bool { default_value } => SettingType::Checkbox(*default_value),
-                            WidgetKind::Choice { default_option_key, options } => {
+                            WidgetKind::Title { heading_level } => {
+                                SettingType::Heading(*heading_level)
+                            }
+                            WidgetKind::Bool { default_value } => {
+                                SettingType::Checkbox(*default_value)
+                            }
+                            WidgetKind::Choice {
+                                default_option_key,
+                                options,
+                            } => {
                                 let mut our_options = Vec::new();
                                 for option in options.iter() {
                                     our_options.push(AutosplitterComboboxChoice {
@@ -197,9 +211,9 @@ impl Autosplitter {
                                         description: option.description.to_string(),
                                     });
                                 }
-                                
+
                                 SettingType::Combobox(default_option_key.to_string(), our_options)
-                            },
+                            }
                             WidgetKind::FileSelect { filters: _ } => SettingType::FilePicker,
                         },
                     };
@@ -207,7 +221,9 @@ impl Autosplitter {
                     settings.push(setting);
                 }
 
-                self.sender.send(RoutedMessage::UI(UIMessage::AutosplitterSettings(settings))).unwrap();
+                self.sender
+                    .send(RoutedMessage::UI(UIMessage::AutosplitterSettings(settings)))
+                    .unwrap();
             }
 
             if status != prev_state {
@@ -224,11 +240,7 @@ impl Autosplitter {
             if let Some(prev_settings) = prev_settings_map {
                 for (key, value) in settings_map.iter() {
                     let send_value = if let Some(old_value) = prev_settings.get(key) {
-                        if old_value != value {
-                            true
-                        } else {
-                            false
-                        }
+                        if old_value != value { true } else { false }
                     } else {
                         true
                     };
@@ -237,14 +249,23 @@ impl Autosplitter {
                         let val = match value {
                             livesplit_auto_splitting::settings::Value::Map(_) => unimplemented!(),
                             livesplit_auto_splitting::settings::Value::List(_) => unimplemented!(),
-                            livesplit_auto_splitting::settings::Value::Bool(v) => AutosplitterSettingUIValue::Bool(*v),
+                            livesplit_auto_splitting::settings::Value::Bool(v) => {
+                                AutosplitterSettingUIValue::Bool(*v)
+                            }
                             livesplit_auto_splitting::settings::Value::I64(_) => unimplemented!(),
                             livesplit_auto_splitting::settings::Value::F64(_) => unimplemented!(),
-                            livesplit_auto_splitting::settings::Value::String(v) => AutosplitterSettingUIValue::String(v.to_string()),
+                            livesplit_auto_splitting::settings::Value::String(v) => {
+                                AutosplitterSettingUIValue::String(v.to_string())
+                            }
                             _ => unimplemented!(),
                         };
 
-                        self.sender.send(RoutedMessage::UI(UIMessage::UpdateAutosplitterSetting(key.to_string(), val))).unwrap();
+                        self.sender
+                            .send(RoutedMessage::UI(UIMessage::UpdateAutosplitterSetting(
+                                key.to_string(),
+                                val,
+                            )))
+                            .unwrap();
                     }
                 }
             }
@@ -323,17 +344,17 @@ impl Autosplitter {
                 let splitter_value = match value {
                     super::AutosplitterSettingValue::Checkbox(v) => {
                         livesplit_auto_splitting::settings::Value::Bool(v)
-                    },
-                    super::AutosplitterSettingValue::Combobox(v) |
-                    super::AutosplitterSettingValue::FilePicker(v) => {
+                    }
+                    super::AutosplitterSettingValue::Combobox(v)
+                    | super::AutosplitterSettingValue::FilePicker(v) => {
                         let string = Arc::from(v.as_str());
 
                         livesplit_auto_splitting::settings::Value::String(string)
-                    },
+                    }
                 };
 
                 let splitter_key = Arc::from(key.as_str());
-                
+
                 settings_map.insert(splitter_key, splitter_value);
 
                 Ok(())

@@ -89,7 +89,7 @@ pub enum AutosplitterSettingValue {
 
 /// Stores a bool or string to represent the value of an autosplitter setting
 /// returning to the UI.
-/// 
+///
 /// Autosplitters use strings for two of their values, so we'll just match it
 /// with the type in the UI. Kind of a mess.
 #[derive(Debug, Clone)]
@@ -103,7 +103,7 @@ pub struct MessageRouter {
     autosplitter_sender: mpsc::Sender<AutosplitterMessage>,
     ui_sender: mpsc::Sender<UIMessage>,
     receiver: mpsc::Receiver<RoutedMessage>,
-    waker: Option<std::task::Waker>,    // waker for UI message polling
+    waker: Option<std::task::Waker>, // waker for UI message polling
 }
 
 impl MessageRouter {
@@ -134,7 +134,6 @@ impl MessageRouter {
     }
 
     fn handle_message(&mut self, dst: RoutedMessage) -> bool {
-        
         match dst {
             RoutedMessage::Client(msg) => self.client_sender.send(msg).unwrap(),
             RoutedMessage::Autosplitter(msg) => self.autosplitter_sender.send(msg).unwrap(),
@@ -144,7 +143,7 @@ impl MessageRouter {
                     self.waker = None;
                 }
                 self.ui_sender.send(msg).unwrap()
-            },
+            }
             RoutedMessage::SetWaker(waker) => self.waker = Some(waker),
             RoutedMessage::Quit => {
                 if let Some(waker) = &self.waker {
@@ -157,9 +156,7 @@ impl MessageRouter {
                 self.autosplitter_sender
                     .send(AutosplitterMessage::Stop)
                     .unwrap();
-                self.ui_sender
-                    .send(UIMessage::Stop)
-                    .unwrap();
+                self.ui_sender.send(UIMessage::Stop).unwrap();
                 return true;
             }
         }
