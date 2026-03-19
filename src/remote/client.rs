@@ -24,12 +24,11 @@ pub struct LiveSplitClient {
 
 impl LiveSplitClient {
     pub fn new(
-        address: String,
         receiver: mpsc::Receiver<LiveSplitServerMessage>,
         sender: mpsc::Sender<RoutedMessage>,
     ) -> Self {
         Self {
-            address,
+            address: "".to_string(),
             receiver,
             sender,
         }

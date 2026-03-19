@@ -1,4 +1,6 @@
-use std::{fmt::Display, sync::mpsc};
+use std::{collections::HashMap, fmt::Display, sync::mpsc};
+
+use serde::{Deserialize, Serialize};
 
 pub enum RoutedMessage {
     Client(LiveSplitServerMessage),
@@ -26,6 +28,7 @@ pub enum AutosplitterMessage {
     TimerGetStateResponse(livesplit_auto_splitting::TimerState, u32),
     ChangeFile(String),
     UpdateSetting(String, AutosplitterSettingValue),
+    LoadSettings(HashMap<String, AutosplitterSettingValue>),
     Stop,
 }
 
@@ -80,7 +83,7 @@ pub struct AutosplitterSetting {
     pub ty: SettingType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AutosplitterSettingValue {
     Checkbox(bool),
     Combobox(String),

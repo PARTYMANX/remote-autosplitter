@@ -9,3 +9,5 @@ edition = "2024"
 livesplit-auto-splitting = { git = "https://github.com/LiveSplit/livesplit-core", rev = "c4a2068b71586d92d3864de00249226c88edf774" }
 iced = { version = "0.14.0", features = ["tokio"] }
 rfd = "0.17.2"
+serde = "1.0.228"
+toml = "1.0.7"

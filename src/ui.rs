@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Index, sync::mpsc};
+use std::{collections::HashMap, ops::Index, path::PathBuf, sync::mpsc};
 
 use iced::{
     Element, Font, Length, Settings, Subscription, Task, color,
@@ -10,16 +10,20 @@ use iced::{
     window,
 };
 
-use crate::remote::{
-    AutosplitterMessage, AutosplitterSetting, AutosplitterSettingUIValue, AutosplitterSettingValue,
-    AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage, Remote, RoutedMessage, UIMessage,
+use crate::{
+    profile::Profile,
+    remote::{
+        AutosplitterMessage, AutosplitterSetting, AutosplitterSettingUIValue,
+        AutosplitterSettingValue, AutosplitterStatus, ConnectionStatus, LiveSplitServerMessage,
+        Remote, RoutedMessage, UIMessage,
+    },
 };
 
-pub fn run_remote_app(autosplitter_filepath: String, server_url: String) {
+pub fn run_remote_app(profile_filepath: Option<String>) {
     let boot = move || {
-        let remote = Remote::new(autosplitter_filepath.clone(), server_url.clone());
+        let remote = Remote::new();
 
-        let app = RemoteApp::new(remote.get_message_sender());
+        let app = RemoteApp::new(remote.get_message_sender(), profile_filepath.clone());
 
         let handler = MessageHandler::new(remote);
 
@@ -71,7 +75,8 @@ pub enum Message {
     WindowEvent((window::Id, window::Event)),
 
     AutosplitterPathEdit(String),
-    AutosplitterPathSelect,
+    AutosplitterPathSelectStart,
+    AutosplitterPathSelectComplete(Option<PathBuf>),
     AutosplitterRun,
     AutosplitterStop,
     AutosplitterSettingCheckbox(String, bool),
@@ -89,24 +94,53 @@ pub enum Message {
     AutosplitterSettings(Vec<AutosplitterSetting>),
     UpdateAutosplitterSetting(String, AutosplitterSettingUIValue),
 
-    NoOp,
+    ProfileLoadStart,
+    ProfileLoadComplete(Option<PathBuf>),
+    ProfileSaveStart,
+    ProfileSaveComplete(Option<PathBuf>),
 }
 
 impl RemoteApp {
-    pub fn new(sender: mpsc::Sender<RoutedMessage>) -> Self {
-        let mut log_lines = RingBuffer::new(1000);
-        for i in 0..100 {
-            log_lines.push(format!("Log Test Line really really really really really really really really really long {}", i));
+    pub fn new(sender: mpsc::Sender<RoutedMessage>, profile_filepath: Option<String>) -> Self {
+        let mut autosplitter_path = "".to_string();
+        let mut server_address = "".to_string();
+        let mut autosplitter_current_settings = HashMap::new();
+
+        if let Some(filepath) = profile_filepath {
+            let profile = Profile::load(&filepath);
+
+            autosplitter_path = profile.autosplitter_filepath;
+            sender
+                .send(RoutedMessage::Autosplitter(
+                    AutosplitterMessage::ChangeFile(autosplitter_path.clone()),
+                ))
+                .unwrap();
+
+            server_address = profile.server_address;
+            sender
+                .send(RoutedMessage::Client(
+                    LiveSplitServerMessage::ChangeAddress(server_address.clone()),
+                ))
+                .unwrap();
+
+            autosplitter_current_settings = profile.autosplitter_settings;
+            sender
+                .send(RoutedMessage::Autosplitter(
+                    AutosplitterMessage::LoadSettings(autosplitter_current_settings.clone()),
+                ))
+                .unwrap();
         }
 
+        let log_lines = RingBuffer::new(1000);
+
         Self {
-            server_address: "".to_string(),
+            server_address,
             connection_status: ConnectionStatus::Disconnected,
             connect_button_awaiting_state: false,
-            autosplitter_path: "".to_string(),
+            autosplitter_path,
             autosplitter_status: AutosplitterStatus::NotRunning,
             autosplitter_settings: Vec::new(),
-            autosplitter_current_settings: HashMap::new(),
+            autosplitter_current_settings,
             log_lines,
             sender,
         }
@@ -115,7 +149,7 @@ impl RemoteApp {
     pub fn view(&self) -> Container<'_, Message> {
         container(column![
             row![
-                self.view_autosplitter_panel(),
+                column![self.view_profile_panel(), self.view_autosplitter_panel(),],
                 column![self.view_connection_panel(), self.view_logs(),],
             ],
             self.view_status_bar(),
@@ -128,7 +162,8 @@ impl RemoteApp {
                 let address_bar = text_input("Server Address", &self.server_address)
                     .on_input(Message::AddressEdit)
                     .on_paste(Message::AddressEdit)
-                    .on_submit(Message::AddressSubmit);
+                    .on_submit(Message::AddressSubmit)
+                    .width(Length::Fill);
 
                 let button = if self.server_address.trim().is_empty() {
                     button("Connect")
@@ -139,7 +174,9 @@ impl RemoteApp {
                 (address_bar, button)
             }
             ConnectionStatus::Connecting => {
-                let address_bar = text_input("Server Address", &self.server_address);
+                let address_bar =
+                    text_input("Server Address", &self.server_address).width(Length::Fill);
+
                 let button = if self.connect_button_awaiting_state {
                     button("Cancel")
                 } else {
@@ -149,7 +186,9 @@ impl RemoteApp {
                 (address_bar, button)
             }
             ConnectionStatus::Connected => {
-                let address_bar = text_input("Server Address", &self.server_address);
+                let address_bar =
+                    text_input("Server Address", &self.server_address).width(Length::Fill);
+
                 let button = if self.connect_button_awaiting_state {
                     button("Disconnect")
                 } else {
@@ -162,6 +201,19 @@ impl RemoteApp {
         };
 
         container(row![address_bar, button,]).padding(8)
+    }
+
+    fn view_profile_panel(&self) -> Container<'_, Message> {
+        container(
+            row![
+                button("Load Profile...").on_press(Message::ProfileLoadStart),
+                button("Save Profile...").on_press(Message::ProfileSaveStart),
+            ]
+            .width(Length::Fill)
+            .spacing(16),
+        )
+        .padding(8)
+        .width(250)
     }
 
     fn view_autosplitter_panel(&self) -> Container<'_, Message> {
@@ -184,7 +236,7 @@ impl RemoteApp {
                     .on_input(Message::AutosplitterPathEdit)
                     .on_paste(Message::AutosplitterPathEdit);
 
-                let button = button("Select...").on_press(Message::AutosplitterPathSelect);
+                let button = button("Select...").on_press(Message::AutosplitterPathSelectStart);
 
                 (file_path_input, button)
             }
@@ -431,16 +483,27 @@ impl RemoteApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::AutosplitterPathSelect => {
-                let filepath = rfd::FileDialog::new()
+            Message::AutosplitterPathSelectStart => {
+                let future = rfd::AsyncFileDialog::new()
                     .set_title("Select ASR Script")
                     .add_filter("ASR Script", &["wasm"])
                     .add_filter("All Files", &["*"])
                     .set_directory("/")
                     .pick_file();
 
-                if let Some(path) = filepath {
-                    let str = path.to_str().unwrap().to_owned();
+                Task::future(future).map(|result| {
+                    let filepath_result = if let Some(file) = result {
+                        Some(file.path().to_path_buf())
+                    } else {
+                        None
+                    };
+
+                    Message::AutosplitterPathSelectComplete(filepath_result)
+                })
+            }
+            Message::AutosplitterPathSelectComplete(filepath_result) => {
+                if let Some(filepath) = filepath_result {
+                    let str = filepath.to_str().unwrap().to_owned();
 
                     self.autosplitter_path = str;
                 }
@@ -675,7 +738,89 @@ impl RemoteApp {
                     _ => Task::none(),
                 }
             }
-            Message::NoOp => Task::none(),
+            Message::ProfileLoadStart => {
+                let future = rfd::AsyncFileDialog::new()
+                    .set_title("Select Profile")
+                    .add_filter("Remote Autosplitter Profile", &["toml"])
+                    .add_filter("All Files", &["*"])
+                    .set_directory("/")
+                    .pick_file();
+
+                Task::future(future).map(|result| {
+                    let filepath_result = if let Some(file) = result {
+                        Some(file.path().to_path_buf())
+                    } else {
+                        None
+                    };
+
+                    Message::ProfileLoadComplete(filepath_result)
+                })
+            }
+            Message::ProfileLoadComplete(filepath_result) => {
+                if let Some(filepath) = filepath_result {
+                    let filepath_str = filepath.to_str().unwrap();
+
+                    let profile = Profile::load(&filepath_str);
+
+                    self.autosplitter_path = profile.autosplitter_filepath;
+                    self.sender
+                        .send(RoutedMessage::Autosplitter(
+                            AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()),
+                        ))
+                        .unwrap();
+
+                    self.server_address = profile.server_address;
+                    self.sender
+                        .send(RoutedMessage::Client(
+                            LiveSplitServerMessage::ChangeAddress(self.server_address.clone()),
+                        ))
+                        .unwrap();
+
+                    self.autosplitter_current_settings = profile.autosplitter_settings;
+                    self.sender
+                        .send(RoutedMessage::Autosplitter(
+                            AutosplitterMessage::LoadSettings(
+                                self.autosplitter_current_settings.clone(),
+                            ),
+                        ))
+                        .unwrap();
+                }
+
+                Task::none()
+            }
+            Message::ProfileSaveStart => {
+                let future = rfd::AsyncFileDialog::new()
+                    .set_title("Select File")
+                    .add_filter("Remote Autosplitter Profile", &["toml"])
+                    .add_filter("All Files", &["*"])
+                    .set_directory("/")
+                    .save_file();
+
+                Task::future(future).map(|result| {
+                    let filepath_result = if let Some(file) = result {
+                        Some(file.path().to_path_buf())
+                    } else {
+                        None
+                    };
+
+                    Message::ProfileSaveComplete(filepath_result)
+                })
+            }
+            Message::ProfileSaveComplete(filepath_result) => {
+                if let Some(filepath) = filepath_result {
+                    let filepath_str = filepath.to_str().unwrap();
+
+                    let profile = Profile {
+                        autosplitter_filepath: self.autosplitter_path.clone(),
+                        server_address: self.server_address.clone(),
+                        autosplitter_settings: self.autosplitter_current_settings.clone(),
+                    };
+
+                    profile.save(filepath_str);
+                }
+
+                Task::none()
+            }
         }
     }
 

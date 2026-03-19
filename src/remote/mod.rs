@@ -24,17 +24,16 @@ pub struct Remote {
 }
 
 impl Remote {
-    pub fn new(filepath: String, address: String) -> Self {
+    pub fn new() -> Self {
         let (router_sender, router_receiver) = mpsc::channel();
 
         let (client_sender, client_receiver) = mpsc::channel();
-        let mut client = LiveSplitClient::new(address, client_receiver, router_sender.clone());
+        let mut client = LiveSplitClient::new(client_receiver, router_sender.clone());
 
         let client_thread = thread::spawn(move || client.run());
 
         let (autosplitter_sender, autosplitter_receiver) = mpsc::channel();
-        let mut autosplitter =
-            Autosplitter::new(filepath, autosplitter_receiver, router_sender.clone());
+        let mut autosplitter = Autosplitter::new(autosplitter_receiver, router_sender.clone());
 
         let autosplitter_thread = thread::spawn(move || autosplitter.run());
 

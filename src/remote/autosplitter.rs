@@ -8,8 +8,11 @@ use std::{
 
 use livesplit_auto_splitting::{AutoSplitter, Runtime, Timer, TimerState, settings::WidgetKind};
 
-use crate::remote::message::{
-    AutosplitterComboboxChoice, AutosplitterSetting, AutosplitterSettingUIValue, SettingType,
+use crate::remote::{
+    AutosplitterSettingValue,
+    message::{
+        AutosplitterComboboxChoice, AutosplitterSetting, AutosplitterSettingUIValue, SettingType,
+    },
 };
 
 use super::message::{
@@ -30,12 +33,11 @@ pub struct Autosplitter {
 
 impl Autosplitter {
     pub fn new(
-        filepath: String,
         receiver: mpsc::Receiver<AutosplitterMessage>,
         sender: mpsc::Sender<RoutedMessage>,
     ) -> Self {
         Self {
-            filepath,
+            filepath: "".to_string(),
             receiver,
             sender,
         }
@@ -89,7 +91,7 @@ impl Autosplitter {
 
         let timer_state = Arc::new(Mutex::new((TimerState::NotRunning, 0)));
         let timer = RemoteTimer::new(self.sender.clone(), timer_state.clone());
-        let settings_map = livesplit_auto_splitting::settings::Map::new(); // TODO: splitter config
+        let settings_map = livesplit_auto_splitting::settings::Map::new();
 
         let config = livesplit_auto_splitting::Config::default();
 
@@ -341,27 +343,45 @@ impl Autosplitter {
                 Ok(())
             }
             AutosplitterMessage::UpdateSetting(key, value) => {
-                let splitter_value = match value {
-                    super::AutosplitterSettingValue::Checkbox(v) => {
-                        livesplit_auto_splitting::settings::Value::Bool(v)
-                    }
-                    super::AutosplitterSettingValue::Combobox(v)
-                    | super::AutosplitterSettingValue::FilePicker(v) => {
-                        let string = Arc::from(v.as_str());
+                Self::set_settings_value(settings_map, key, value);
 
-                        livesplit_auto_splitting::settings::Value::String(string)
-                    }
-                };
+                Ok(())
+            }
+            AutosplitterMessage::LoadSettings(map) => {
+                // clear the settings and set the incoming ones
+                *settings_map = livesplit_auto_splitting::settings::Map::new();
 
-                let splitter_key = Arc::from(key.as_str());
-
-                settings_map.insert(splitter_key, splitter_value);
+                for (key, value) in map {
+                    Self::set_settings_value(settings_map, key, value);
+                }
 
                 Ok(())
             }
             AutosplitterMessage::ChangeFile(new_file) => Err(ExitReason::ChangeFile(new_file)),
             AutosplitterMessage::Stop => Err(ExitReason::RequestedStop),
         }
+    }
+
+    fn set_settings_value(
+        settings_map: &mut livesplit_auto_splitting::settings::Map,
+        key: String,
+        value: AutosplitterSettingValue,
+    ) {
+        let splitter_value = match value {
+            super::AutosplitterSettingValue::Checkbox(v) => {
+                livesplit_auto_splitting::settings::Value::Bool(v)
+            }
+            super::AutosplitterSettingValue::Combobox(v)
+            | super::AutosplitterSettingValue::FilePicker(v) => {
+                let string = Arc::from(v.as_str());
+
+                livesplit_auto_splitting::settings::Value::String(string)
+            }
+        };
+
+        let splitter_key = Arc::from(key.as_str());
+
+        settings_map.insert(splitter_key, splitter_value);
     }
 
     fn log(&self, msg: String) {

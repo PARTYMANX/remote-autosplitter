@@ -1,3 +1,4 @@
+mod profile;
 mod remote;
 mod ui;
 
@@ -6,14 +7,16 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    /*if args.len() < 3 {
-        println!("Usage: remote-autosplitter <autosplitter wasm path> <address:port>");
+    if args.len() > 2 {
+        println!("Usage: remote-autosplitter [profile filepath]");
         return;
-    }*/
+    }
 
-    //let filepath = args.get(1).unwrap().to_owned();
-    //let address = args.get(2).unwrap().to_owned();
+    let profile_filepath = if args.len() == 2 {
+        Some(args[1].clone())
+    } else {
+        None
+    };
 
-    //let remote = remote::Remote::new("".to_string(), "".to_string());
-    ui::run_remote_app("".to_string(), "".to_string());
+    ui::run_remote_app(profile_filepath);
 }
