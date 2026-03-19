@@ -468,7 +468,9 @@ impl Timer for RemoteTimer {
         self.log_action(format!("resuming game time!"));
     }
 
-    fn set_variable(&mut self, _key: &str, _value: &str) {}
+    fn set_variable(&mut self, _key: &str, _value: &str) {
+        self.log_action(format!("WARNING: Autosplitter attempted to set variable which is not supported!"));
+    }
 
     fn current_split_index(&self) -> Option<usize> {
         let state = self.timer_state.lock().unwrap();
@@ -479,7 +481,9 @@ impl Timer for RemoteTimer {
     }
 
     fn segment_splitted(&self, _idx: usize) -> Option<bool> {
-        todo!()
+        self.log_action(format!("WARNING: Autosplitter attempted to get whether segment was splitted which is not supported!"));
+
+        None
     }
 
     fn skip_split(&mut self) {

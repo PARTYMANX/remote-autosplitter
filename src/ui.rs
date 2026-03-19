@@ -726,8 +726,6 @@ impl RemoteApp {
 
                         self.sender.send(RoutedMessage::Quit).unwrap();
 
-                        // TODO: add message for quit acknowledgement
-
                         window::close(id)
                     }
                     window::Event::FileDropped(path) => {

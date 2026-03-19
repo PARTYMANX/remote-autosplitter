@@ -62,7 +62,7 @@ impl Remote {
             Ok(v) => Some(v),
             Err(e) => match e {
                 mpsc::TryRecvError::Empty => None,
-                mpsc::TryRecvError::Disconnected => todo!(),
+                mpsc::TryRecvError::Disconnected => panic!("UI Receiver was disconnected!"),
             },
         }
     }
