@@ -36,11 +36,14 @@ impl LiveSplitClient {
 
     pub fn run(&mut self) {
         loop {
-            self.sender
+            match self
+                .sender
                 .send(RoutedMessage::UI(UIMessage::ConnectionStatus(
                     ConnectionStatus::Disconnected,
-                )))
-                .unwrap();
+                ))) {
+                Ok(_) => {}
+                Err(_) => break,
+            }
 
             if !self.address.is_empty() {
                 match self.inner_run() {
@@ -49,7 +52,6 @@ impl LiveSplitClient {
                     ExitReason::RequestedStop => break,
                 }
             } else {
-                println!("Running connection offline message");
                 match self.handle_offline_messages() {
                     Ok(_) => {}
                     Err(e) => match e {
@@ -124,7 +126,14 @@ impl LiveSplitClient {
     }
 
     fn wait_poll_offline_messages(&self, target: std::time::Instant) -> Result<(), ExitReason> {
+        // flush current messages before waiting
+        match self.flush_offline_messages() {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+
         let mut cur_time = std::time::Instant::now();
+
         while cur_time < target {
             cur_time = std::time::Instant::now();
 
@@ -144,6 +153,17 @@ impl LiveSplitClient {
                         }
                     },
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn flush_offline_messages(&self) -> Result<(), ExitReason> {
+        while let Ok(message) = self.receiver.try_recv() {
+            match Self::handle_offline_message(message) {
+                Ok(_) => {}
+                Err(e) => return Err(e),
             }
         }
 
@@ -349,8 +369,6 @@ impl LiveSplitClient {
     }
 
     fn log(&self, msg: String) {
-        self.sender
-            .send(RoutedMessage::UI(UIMessage::Log(msg)))
-            .unwrap();
+        let _ = self.sender.send(RoutedMessage::UI(UIMessage::Log(msg)));
     }
 }

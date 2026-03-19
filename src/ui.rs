@@ -51,8 +51,6 @@ pub fn run_remote_app(profile_filepath: Option<String>) {
         .title("Remote Autosplitter");
 
     app.run().unwrap();
-
-    println!("Done!");
 }
 
 pub struct RemoteApp {
@@ -107,28 +105,34 @@ impl RemoteApp {
         let mut autosplitter_current_settings = HashMap::new();
 
         if let Some(filepath) = profile_filepath {
-            let profile = Profile::load(&filepath);
+            match Profile::load(&filepath) {
+                Ok(profile) => {
+                    autosplitter_path = profile.autosplitter_filepath;
+                    sender
+                        .send(RoutedMessage::Autosplitter(
+                            AutosplitterMessage::ChangeFile(autosplitter_path.clone()),
+                        ))
+                        .unwrap();
 
-            autosplitter_path = profile.autosplitter_filepath;
-            sender
-                .send(RoutedMessage::Autosplitter(
-                    AutosplitterMessage::ChangeFile(autosplitter_path.clone()),
-                ))
-                .unwrap();
+                    server_address = profile.server_address;
+                    sender
+                        .send(RoutedMessage::Client(
+                            LiveSplitServerMessage::ChangeAddress(server_address.clone()),
+                        ))
+                        .unwrap();
 
-            server_address = profile.server_address;
-            sender
-                .send(RoutedMessage::Client(
-                    LiveSplitServerMessage::ChangeAddress(server_address.clone()),
-                ))
-                .unwrap();
-
-            autosplitter_current_settings = profile.autosplitter_settings;
-            sender
-                .send(RoutedMessage::Autosplitter(
-                    AutosplitterMessage::LoadSettings(autosplitter_current_settings.clone()),
-                ))
-                .unwrap();
+                    autosplitter_current_settings = profile.autosplitter_settings;
+                    sender
+                        .send(RoutedMessage::Autosplitter(
+                            AutosplitterMessage::LoadSettings(
+                                autosplitter_current_settings.clone(),
+                            ),
+                        ))
+                        .unwrap();
+                }
+                // fail silently because we have no ability to log nicely
+                Err(_) => {}
+            }
         }
 
         let log_lines = RingBuffer::new(1000);
@@ -722,6 +726,8 @@ impl RemoteApp {
 
                         self.sender.send(RoutedMessage::Quit).unwrap();
 
+                        // TODO: add message for quit acknowledgement
+
                         window::close(id)
                     }
                     window::Event::FileDropped(path) => {
@@ -760,33 +766,40 @@ impl RemoteApp {
                 if let Some(filepath) = filepath_result {
                     let filepath_str = filepath.to_str().unwrap();
 
-                    let profile = Profile::load(&filepath_str);
+                    match Profile::load(&filepath_str) {
+                        Ok(profile) => {
+                            self.autosplitter_path = profile.autosplitter_filepath;
+                            self.sender
+                                .send(RoutedMessage::Autosplitter(
+                                    AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()),
+                                ))
+                                .unwrap();
 
-                    self.autosplitter_path = profile.autosplitter_filepath;
-                    self.sender
-                        .send(RoutedMessage::Autosplitter(
-                            AutosplitterMessage::ChangeFile(self.autosplitter_path.clone()),
-                        ))
-                        .unwrap();
+                            self.server_address = profile.server_address;
+                            self.sender
+                                .send(RoutedMessage::Client(
+                                    LiveSplitServerMessage::ChangeAddress(
+                                        self.server_address.clone(),
+                                    ),
+                                ))
+                                .unwrap();
 
-                    self.server_address = profile.server_address;
-                    self.sender
-                        .send(RoutedMessage::Client(
-                            LiveSplitServerMessage::ChangeAddress(self.server_address.clone()),
-                        ))
-                        .unwrap();
+                            self.autosplitter_current_settings = profile.autosplitter_settings;
+                            self.sender
+                                .send(RoutedMessage::Autosplitter(
+                                    AutosplitterMessage::LoadSettings(
+                                        self.autosplitter_current_settings.clone(),
+                                    ),
+                                ))
+                                .unwrap();
 
-                    self.autosplitter_current_settings = profile.autosplitter_settings;
-                    self.sender
-                        .send(RoutedMessage::Autosplitter(
-                            AutosplitterMessage::LoadSettings(
-                                self.autosplitter_current_settings.clone(),
-                            ),
-                        ))
-                        .unwrap();
+                            Task::none()
+                        }
+                        Err(e) => Task::done(Message::Log(format!("Profile load failed: {:?}", e))),
+                    }
+                } else {
+                    Task::none()
                 }
-
-                Task::none()
             }
             Message::ProfileSaveStart => {
                 let future = rfd::AsyncFileDialog::new()
@@ -816,10 +829,13 @@ impl RemoteApp {
                         autosplitter_settings: self.autosplitter_current_settings.clone(),
                     };
 
-                    profile.save(filepath_str);
+                    match profile.save(filepath_str) {
+                        Ok(_) => Task::none(),
+                        Err(e) => Task::done(Message::Log(format!("Profile save failed: {:?}", e))),
+                    }
+                } else {
+                    Task::none()
                 }
-
-                Task::none()
             }
         }
     }

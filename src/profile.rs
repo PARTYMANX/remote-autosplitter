@@ -16,45 +16,46 @@ pub struct Profile {
     pub autosplitter_settings: HashMap<String, AutosplitterSettingValue>,
 }
 
+#[derive(Debug)]
+pub enum ProfileError {
+    #[allow(dead_code)]
+    IOError(std::io::Error),
+    TomlError,
+}
+
 impl Profile {
-    pub fn save(&self, file_path: &str) {
-        let toml = toml::to_string_pretty(self).unwrap();
+    pub fn save(&self, file_path: &str) -> Result<(), ProfileError> {
+        let toml = match toml::to_string_pretty(self) {
+            Ok(v) => v,
+            Err(_) => return Err(ProfileError::TomlError),
+        };
 
         let mut output_file = match File::create(Path::new(file_path)) {
             Ok(v) => v,
-            Err(e) => {
-                println!("Failed to open {}: {}", file_path, e);
-                //return PatcherResult::Failure;
-                panic!()
-            }
+            Err(e) => return Err(ProfileError::IOError(e)),
         };
 
         match output_file.write_all(&toml.as_bytes()) {
-            Ok(_) => {}
-            Err(e) => {
-                println!("Failed to write {}: {}", file_path, e);
-            }
-        };
+            Ok(_) => Ok(()),
+            Err(e) => return Err(ProfileError::IOError(e)),
+        }
     }
 
-    pub fn load(file_path: &str) -> Self {
+    pub fn load(file_path: &str) -> Result<Self, ProfileError> {
         let mut input_file = match File::open(Path::new(file_path)) {
             Ok(v) => v,
-            Err(e) => {
-                println!("Failed to open {}: {}", file_path, e);
-                //return PatcherResult::Failure;
-                panic!()
-            }
+            Err(e) => return Err(ProfileError::IOError(e)),
         };
 
         let mut input_file_buffer = Vec::new();
         match input_file.read_to_end(&mut input_file_buffer) {
             Ok(_) => {}
-            Err(e) => {
-                println!("Failed to read {}: {}", file_path, e);
-            }
+            Err(e) => return Err(ProfileError::IOError(e)),
         }
 
-        toml::from_slice(&input_file_buffer).unwrap()
+        match toml::from_slice(&input_file_buffer) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(ProfileError::TomlError),
+        }
     }
 }

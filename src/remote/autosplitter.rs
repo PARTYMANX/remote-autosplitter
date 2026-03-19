@@ -45,11 +45,14 @@ impl Autosplitter {
 
     pub fn run(&mut self) {
         loop {
-            self.sender
+            match self
+                .sender
                 .send(RoutedMessage::UI(UIMessage::AutosplitterStatus(
                     AutosplitterStatus::NotRunning,
-                )))
-                .unwrap();
+                ))) {
+                Ok(_) => {}
+                Err(_) => break,
+            }
 
             if !self.filepath.is_empty() {
                 match self.inner_run() {
@@ -62,10 +65,7 @@ impl Autosplitter {
                     Ok(_) => {}
                     Err(e) => match e {
                         ExitReason::SplitterPanic => {}
-                        ExitReason::ChangeFile(new_file) => {
-                            println!("File changed! {}", new_file);
-                            self.filepath = new_file
-                        }
+                        ExitReason::ChangeFile(new_file) => self.filepath = new_file,
                         ExitReason::RequestedStop => break,
                     },
                 }
@@ -113,14 +113,6 @@ impl Autosplitter {
 
         match compiled_splitter.instantiate(timer, Some(settings_map), None) {
             Ok(splitter) => {
-                for setting in splitter.settings_map().iter() {
-                    println!("Splitter setting: {}: {:?}", setting.0, setting.1);
-                }
-
-                for widget in splitter.settings_widgets().iter() {
-                    println!("Splitter widget: {}", widget.key);
-                }
-
                 let result = self.run_splitter(&splitter, &timer_state);
 
                 // Ignore result of send here, chances are that we're exiting.
@@ -171,9 +163,13 @@ impl Autosplitter {
 
             // request a state update from the client
             // we'll get the response when polling the receiver
-            self.sender
+            match self
+                .sender
                 .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
-                .unwrap();
+            {
+                Ok(_) => {}
+                Err(_) => return ExitReason::RequestedStop,
+            }
 
             // send widget data here
             let mut hasher = std::hash::DefaultHasher::new();
@@ -413,9 +409,7 @@ impl RemoteTimer {
     }
 
     fn log_action(&self, msg: String) {
-        self.sender
-            .send(RoutedMessage::UI(UIMessage::Log(msg)))
-            .unwrap();
+        let _ = self.sender.send(RoutedMessage::UI(UIMessage::Log(msg)));
     }
 }
 
@@ -507,12 +501,10 @@ impl Timer for RemoteTimer {
     }
 
     fn log_auto_splitter(&mut self, message: fmt::Arguments) {
-        self.sender
-            .send(RoutedMessage::UI(UIMessage::Log(format!(
-                "autosplitter: {}",
-                message
-            ))))
-            .unwrap();
+        let _ = self.sender.send(RoutedMessage::UI(UIMessage::Log(format!(
+            "autosplitter: {}",
+            message
+        ))));
     }
 
     fn log_runtime(
@@ -520,11 +512,9 @@ impl Timer for RemoteTimer {
         message: fmt::Arguments,
         _log_level: livesplit_auto_splitting::LogLevel,
     ) {
-        self.sender
-            .send(RoutedMessage::UI(UIMessage::Log(format!(
-                "runtime: {}",
-                message
-            ))))
-            .unwrap();
+        let _ = self.sender.send(RoutedMessage::UI(UIMessage::Log(format!(
+            "runtime: {}",
+            message
+        ))));
     }
 }
