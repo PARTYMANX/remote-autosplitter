@@ -140,6 +140,7 @@ impl Autosplitter {
         let mut prev_state = AutosplitterStatus::NotRunning;
         let mut prev_settings_hash = None;
         let mut prev_settings_map: Option<livesplit_auto_splitting::settings::Map> = None;
+        let mut got_status = true;
         loop {
             let mut status = AutosplitterStatus::Running;
 
@@ -163,12 +164,17 @@ impl Autosplitter {
 
             // request a state update from the client
             // we'll get the response when polling the receiver
-            match self
-                .sender
-                .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
-            {
-                Ok(_) => {}
-                Err(_) => return ExitReason::RequestedStop,
+            // only request if we have gotten a response for our previous request
+            if got_status {
+                match self
+                    .sender
+                    .send(RoutedMessage::Client(LiveSplitServerMessage::TimerGetState))
+                {
+                    Ok(_) => {
+                        got_status = false;
+                    }
+                    Err(_) => return ExitReason::RequestedStop,
+                }
             }
 
             // send widget data here
@@ -268,7 +274,7 @@ impl Autosplitter {
                 }
             }
 
-            match self.wait_poll_messages(next_run_time, &timer_state, &mut settings_map) {
+            match self.wait_poll_messages(next_run_time, &timer_state, &mut got_status, &mut settings_map) {
                 Ok(_) => {}
                 Err(e) => return e,
             }
@@ -295,6 +301,7 @@ impl Autosplitter {
         &self,
         target: std::time::Instant,
         timer_state: &Arc<Mutex<(TimerState, u32)>>,
+        got_status: &mut bool,
         settings_map: &mut livesplit_auto_splitting::settings::Map,
     ) -> Result<(), ExitReason> {
         let mut cur_time = std::time::Instant::now();
@@ -306,7 +313,7 @@ impl Autosplitter {
                     .receiver
                     .recv_timeout(std::time::Duration::from_millis(1))
                 {
-                    Ok(message) => match self.service_message(message, timer_state, settings_map) {
+                    Ok(message) => match self.service_message(message, timer_state, got_status, settings_map) {
                         Ok(_) => {}
                         Err(e) => return Err(e),
                     },
@@ -327,6 +334,7 @@ impl Autosplitter {
         &self,
         message: AutosplitterMessage,
         timer_state: &Arc<Mutex<(TimerState, u32)>>,
+        got_status: &mut bool,
         settings_map: &mut livesplit_auto_splitting::settings::Map,
     ) -> Result<(), ExitReason> {
         match message {
@@ -335,6 +343,8 @@ impl Autosplitter {
 
                 lock.0 = state;
                 lock.1 = split_index;
+
+                *got_status = true;
 
                 Ok(())
             }
