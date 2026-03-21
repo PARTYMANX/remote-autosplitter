@@ -285,7 +285,7 @@ impl LiveSplitClient {
     }
 
     fn msg_timer_resume_game_time(&self, socket: &mut net::TcpStream) -> Result<(), ExitReason> {
-        match socket.write("resumegametime\r\n".as_bytes()) {
+        match socket.write("unpausegametime\r\n".as_bytes()) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.log(format!("Socket error: {}", e));
